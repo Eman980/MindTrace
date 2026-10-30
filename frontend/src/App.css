@@ -1,0 +1,17 @@
+/* App-level styles — animations and global overrides */
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes spin-animation {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.spin-animation {
+  animation: spin-animation 1s linear infinite;
+}
