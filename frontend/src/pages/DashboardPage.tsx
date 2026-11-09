@@ -6,14 +6,11 @@ import {
   Brain,
   AlertTriangle,
   CheckCircle2,
-  Clock,
   ArrowRight,
   Sparkles,
   Upload,
   RefreshCw,
   PlusCircle,
-  HelpCircle,
-  TrendingUp,
   FileQuestion
 } from 'lucide-react';
 
@@ -174,134 +171,101 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ setActiveTab, onSe
         </div>
       </div>
 
-      {/* Misconception Priority Breakdown & Quick Summary */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: '24px', marginBottom: '36px' }}>
-        <div className="card">
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '18px' }}>
+      {/* Misconception Priority Profile */}
+      <div className="card" style={{ marginBottom: '36px' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '18px' }}>
+          <div>
             <h3 style={{ fontSize: '18px', fontWeight: 700, color: 'var(--primary-navy)' }}>
               Misconception Priority Profile
             </h3>
-            <button
-              id="view-all-misconceptions-btn"
-              className="btn btn-secondary btn-sm"
-              onClick={() => setActiveTab('misconceptions')}
-            >
-              <span>View All</span>
-              <ArrowRight size={14} />
-            </button>
+            <p style={{ fontSize: '13px', color: 'var(--text-muted)', marginTop: '2px' }}>
+              Active tracking across detected high, medium, and low severity conceptual friction points.
+            </p>
           </div>
-
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '12px' }}>
-            <div
-              style={{
-                background: 'var(--priority-high-bg)',
-                border: '1px solid var(--priority-high-border)',
-                borderRadius: 'var(--radius-md)',
-                padding: '14px',
-              }}
-            >
-              <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--priority-high-text)', textTransform: 'uppercase' }}>
-                High Priority
-              </div>
-              <div style={{ fontSize: '24px', fontWeight: 800, color: 'var(--priority-high-text)', marginTop: '4px' }}>
-                {stats?.misconception_summary.high_priority || 0}
-              </div>
-              <div style={{ fontSize: '12px', color: '#991B1B', marginTop: '2px' }}>
-                Require immediate conceptual review
-              </div>
-            </div>
-
-            <div
-              style={{
-                background: 'var(--priority-med-bg)',
-                border: '1px solid var(--priority-med-border)',
-                borderRadius: 'var(--radius-md)',
-                padding: '14px',
-              }}
-            >
-              <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--priority-med-text)', textTransform: 'uppercase' }}>
-                Medium Priority
-              </div>
-              <div style={{ fontSize: '24px', fontWeight: 800, color: 'var(--priority-med-text)', marginTop: '4px' }}>
-                {stats?.misconception_summary.medium_priority || 0}
-              </div>
-              <div style={{ fontSize: '12px', color: '#92400E', marginTop: '2px' }}>
-                Multiple friction points detected
-              </div>
-            </div>
-
-            <div
-              style={{
-                background: 'var(--priority-low-bg)',
-                border: '1px solid var(--priority-low-border)',
-                borderRadius: 'var(--radius-md)',
-                padding: '14px',
-              }}
-            >
-              <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--priority-low-text)', textTransform: 'uppercase' }}>
-                Low Priority
-              </div>
-              <div style={{ fontSize: '24px', fontWeight: 800, color: 'var(--priority-low-text)', marginTop: '4px' }}>
-                {stats?.misconception_summary.low_priority || 0}
-              </div>
-              <div style={{ fontSize: '12px', color: '#1E40AF', marginTop: '2px' }}>
-                Minor checkpoint slip
-              </div>
-            </div>
-
-            <div
-              style={{
-                background: 'var(--status-resolved-bg)',
-                border: '1px solid var(--status-resolved-border)',
-                borderRadius: 'var(--radius-md)',
-                padding: '14px',
-              }}
-            >
-              <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--status-resolved-text)', textTransform: 'uppercase' }}>
-                Resolved
-              </div>
-              <div style={{ fontSize: '24px', fontWeight: 800, color: 'var(--status-resolved-text)', marginTop: '4px' }}>
-                {stats?.misconception_summary.resolved || 0}
-              </div>
-              <div style={{ fontSize: '12px', color: '#166534', marginTop: '2px' }}>
-                Successfully verified in review
-              </div>
-            </div>
-          </div>
+          <button
+            id="view-all-misconceptions-btn"
+            className="btn btn-secondary btn-sm"
+            onClick={() => setActiveTab('misconceptions')}
+          >
+            <span>View All</span>
+            <ArrowRight size={14} />
+          </button>
         </div>
 
-        {/* Cognitive Telemetry Box */}
-        <div className="card">
-          <h3 style={{ fontSize: '18px', fontWeight: 700, color: 'var(--primary-navy)', marginBottom: '8px' }}>
-            Why Persistent Tracking Matters
-          </h3>
-          <p style={{ fontSize: '14px', color: 'var(--text-muted)', lineHeight: 1.5, marginBottom: '16px' }}>
-            MindTrace links your lecture player behavior directly to knowledge retention.
-          </p>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-            <div style={{ display: 'flex', alignItems: 'flex-start', gap: '12px' }}>
-              <div style={{ background: 'var(--accent-soft)', color: 'var(--accent-purple)', padding: '6px', borderRadius: 'var(--radius-md)' }}>
-                <Clock size={16} />
-              </div>
-              <div style={{ fontSize: '13px' }}>
-                <strong>Replay Threshold:</strong> Replaying a concept segment 3 or more times automatically tags it for review.
-              </div>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '14px' }}>
+          <div
+            style={{
+              background: 'var(--priority-high-bg)',
+              border: '1px solid var(--priority-high-border)',
+              borderRadius: 'var(--radius-md)',
+              padding: '16px',
+            }}
+          >
+            <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--priority-high-text)', textTransform: 'uppercase' }}>
+              High Priority
             </div>
-            <div style={{ display: 'flex', alignItems: 'flex-start', gap: '12px' }}>
-              <div style={{ background: '#FEE2E2', color: '#DC2626', padding: '6px', borderRadius: 'var(--radius-md)' }}>
-                <HelpCircle size={16} />
-              </div>
-              <div style={{ fontSize: '13px' }}>
-                <strong>Unresolved Flag:</strong> Clicking 'Mark as Unresolved' during a lecture stores explicit student feedback.
-              </div>
+            <div style={{ fontSize: '26px', fontWeight: 800, color: 'var(--priority-high-text)', marginTop: '4px' }}>
+              {stats?.misconception_summary.high_priority || 0}
             </div>
-            <div style={{ display: 'flex', alignItems: 'flex-start', gap: '12px' }}>
-              <div style={{ background: '#DCFCE7', color: '#16A34A', padding: '6px', borderRadius: 'var(--radius-md)' }}>
-                <TrendingUp size={16} />
-              </div>
-              <div style={{ fontSize: '13px' }}>
-                <strong>Active Resolution:</strong> Misconceptions do not disappear until you demonstrate mastery on review questions.
-              </div>
+            <div style={{ fontSize: '12px', color: '#991B1B', marginTop: '2px' }}>
+              Require immediate conceptual review
+            </div>
+          </div>
+
+          <div
+            style={{
+              background: 'var(--priority-med-bg)',
+              border: '1px solid var(--priority-med-border)',
+              borderRadius: 'var(--radius-md)',
+              padding: '16px',
+            }}
+          >
+            <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--priority-med-text)', textTransform: 'uppercase' }}>
+              Medium Priority
+            </div>
+            <div style={{ fontSize: '26px', fontWeight: 800, color: 'var(--priority-med-text)', marginTop: '4px' }}>
+              {stats?.misconception_summary.medium_priority || 0}
+            </div>
+            <div style={{ fontSize: '12px', color: '#92400E', marginTop: '2px' }}>
+              Multiple friction points detected
+            </div>
+          </div>
+
+          <div
+            style={{
+              background: 'var(--priority-low-bg)',
+              border: '1px solid var(--priority-low-border)',
+              borderRadius: 'var(--radius-md)',
+              padding: '16px',
+            }}
+          >
+            <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--priority-low-text)', textTransform: 'uppercase' }}>
+              Low Priority
+            </div>
+            <div style={{ fontSize: '26px', fontWeight: 800, color: 'var(--priority-low-text)', marginTop: '4px' }}>
+              {stats?.misconception_summary.low_priority || 0}
+            </div>
+            <div style={{ fontSize: '12px', color: '#1E40AF', marginTop: '2px' }}>
+              Minor checkpoint slip
+            </div>
+          </div>
+
+          <div
+            style={{
+              background: 'var(--status-resolved-bg)',
+              border: '1px solid var(--status-resolved-border)',
+              borderRadius: 'var(--radius-md)',
+              padding: '16px',
+            }}
+          >
+            <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--status-resolved-text)', textTransform: 'uppercase' }}>
+              Resolved
+            </div>
+            <div style={{ fontSize: '26px', fontWeight: 800, color: 'var(--status-resolved-text)', marginTop: '4px' }}>
+              {stats?.misconception_summary.resolved || 0}
+            </div>
+            <div style={{ fontSize: '12px', color: '#166534', marginTop: '2px' }}>
+              Successfully verified in review
             </div>
           </div>
         </div>

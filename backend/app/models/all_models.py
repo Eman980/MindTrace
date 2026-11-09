@@ -2,7 +2,7 @@ import datetime
 import json
 from typing import List, Optional, Dict, Any
 from sqlalchemy import (
-    Column, Integer, String, Float, Boolean, Text, DateTime, ForeignKey, Index
+    Column, Integer, String, Float, Boolean, Text, DateTime, ForeignKey, Index, UniqueConstraint
 )
 from sqlalchemy.orm import relationship
 from app.database import Base
@@ -42,8 +42,13 @@ class Lecture(Base):
     transcription_status = Column(String(50), default="ready")  # ready, untranscribed, transcribed
     processing_error = Column(Text, nullable=True)
     is_demo = Column(Boolean, default=False)
+    file_hash = Column(String(64), index=True, nullable=True)
     created_at = Column(DateTime(timezone=True), default=utcnow)
     updated_at = Column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+    __table_args__ = (
+        UniqueConstraint("user_id", "file_hash", name="uq_lectures_user_file_hash"),
+    )
 
     user = relationship("User", back_populates="lectures")
     media_file = relationship("MediaFile", uselist=False, back_populates="lecture", cascade="all, delete-orphan")
@@ -63,6 +68,7 @@ class MediaFile(Base):
     file_path = Column(String(500), nullable=False)
     file_size = Column(Integer, default=0)
     mime_type = Column(String(100), nullable=False)
+    file_hash = Column(String(64), index=True, nullable=True)
     created_at = Column(DateTime(timezone=True), default=utcnow)
 
     lecture = relationship("Lecture", back_populates="media_file")

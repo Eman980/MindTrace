@@ -17,25 +17,14 @@ from app.config import settings
 def utcnow():
     return datetime.datetime.now(datetime.timezone.utc)
 
-def seed_demo_data(db: Session, target_user: User = None) -> Lecture:
+def seed_demo_data(db: Session, target_user: User) -> Lecture:
     """
     Seeds the realistic Demo Lecture ('Introduction to Functions') with complete
     concepts, checkpoints, transcript segments, and pre-detected misconceptions.
     Allows viva demonstration without requiring any API keys or manual uploads.
     """
     if not target_user:
-        # Check if default demo student exists
-        target_user = db.query(User).filter(User.email == "demo@mindtrace.edu").first()
-        if not target_user:
-            target_user = User(
-                email="demo@mindtrace.edu",
-                full_name="Alex Chen",
-                hashed_password=get_password_hash("mindtrace123"),
-                role="student"
-            )
-            db.add(target_user)
-            db.commit()
-            db.refresh(target_user)
+        raise ValueError("A valid target_user must be provided to seed_demo_data.")
 
     # Check if demo lecture already exists for this user
     existing_lecture = db.query(Lecture).filter(
@@ -50,6 +39,15 @@ def seed_demo_data(db: Session, target_user: User = None) -> Lecture:
     # Ensure playable sample audio exists
     sample_audio_path = os.path.join(settings.UPLOAD_DIR, "intro_to_functions.wav")
     generate_sample_audio_if_needed(sample_audio_path, duration_seconds=420)
+
+    demo_hash = None
+    if os.path.exists(sample_audio_path):
+        import hashlib
+        hasher = hashlib.sha256()
+        with open(sample_audio_path, "rb") as sf:
+            while chunk := sf.read(1024 * 1024):
+                hasher.update(chunk)
+        demo_hash = hasher.hexdigest()
     
     # 1. Create Lecture
     lecture = Lecture(
@@ -61,6 +59,7 @@ def seed_demo_data(db: Session, target_user: User = None) -> Lecture:
         media_type="audio",
         status="ready",
         is_demo=True,
+        file_hash=demo_hash,
         created_at=utcnow()
     )
     db.add(lecture)
@@ -74,6 +73,7 @@ def seed_demo_data(db: Session, target_user: User = None) -> Lecture:
         file_path=sample_audio_path,
         file_size=os.path.getsize(sample_audio_path) if os.path.exists(sample_audio_path) else 10240,
         mime_type="audio/wav",
+        file_hash=demo_hash,
         created_at=utcnow()
     )
     db.add(media)

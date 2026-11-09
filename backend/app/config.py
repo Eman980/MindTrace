@@ -7,7 +7,8 @@ class Settings(BaseSettings):
     API_V1_PREFIX: str = "/api/v1"
 
     # Database
-    DATABASE_URL: str = os.getenv("DATABASE_URL", "sqlite:///./mindtrace.db")
+    DEFAULT_DB_PATH: str = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "mindtrace.db")
+    DATABASE_URL: str = os.getenv("DATABASE_URL", f"sqlite:///{DEFAULT_DB_PATH}")
 
     # Security & Auth
     SECRET_KEY: str = os.getenv("SECRET_KEY", "mindtrace_fyp_university_secret_key_change_in_prod_2026")
@@ -61,6 +62,23 @@ class Settings(BaseSettings):
     class Config:
         env_file = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".env")
         extra = "allow"
+
+    @property
+    def DATABASE_URL_NORMALIZED(self) -> str:
+        url = self.DATABASE_URL
+        if url.startswith("sqlite:///./"):
+            rel_file = url[len("sqlite:///./"):]
+            backend_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+            abs_file = os.path.join(backend_dir, rel_file)
+            return f"sqlite:///{abs_file}"
+        return url
+
+    @property
+    def UPLOAD_DIR_NORMALIZED(self) -> str:
+        if self.UPLOAD_DIR == "./uploads" or not os.path.isabs(self.UPLOAD_DIR):
+            backend_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+            return os.path.abspath(os.path.join(backend_dir, self.UPLOAD_DIR))
+        return self.UPLOAD_DIR
 
     @property
     def effective_delay_hours(self) -> float:

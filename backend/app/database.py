@@ -3,14 +3,15 @@ from sqlalchemy.orm import declarative_base, sessionmaker
 from app.config import settings
 
 # Configure SQLite or PostgreSQL
-if settings.DATABASE_URL.startswith("sqlite"):
+db_url = getattr(settings, "DATABASE_URL_NORMALIZED", settings.DATABASE_URL)
+if db_url.startswith("sqlite"):
     engine = create_engine(
-        settings.DATABASE_URL,
+        db_url,
         connect_args={"check_same_thread": False}
     )
 else:
     engine = create_engine(
-        settings.DATABASE_URL,
+        db_url,
         pool_pre_ping=True
     )
 
@@ -57,6 +58,23 @@ def ensure_schema_compatibility():
                 conn.commit()
             if lec_cols and "processing_error" not in lec_cols:
                 conn.execute(text("ALTER TABLE lectures ADD COLUMN processing_error TEXT DEFAULT NULL"))
+                conn.commit()
+            if lec_cols and "file_hash" not in lec_cols:
+                conn.execute(text("ALTER TABLE lectures ADD COLUMN file_hash VARCHAR(64) DEFAULT NULL"))
+                conn.commit()
+            if lec_cols:
+                conn.execute(text("DROP INDEX IF EXISTS idx_lectures_file_hash"))
+                conn.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS uq_lectures_user_file_hash ON lectures(user_id, file_hash)"))
+                conn.commit()
+
+            # Media files columns
+            res_mf = conn.execute(text("PRAGMA table_info(media_files)"))
+            mf_cols = {row[1] for row in res_mf.fetchall()}
+            if mf_cols and "file_hash" not in mf_cols:
+                conn.execute(text("ALTER TABLE media_files ADD COLUMN file_hash VARCHAR(64) DEFAULT NULL"))
+                conn.commit()
+            if mf_cols:
+                conn.execute(text("CREATE INDEX IF NOT EXISTS idx_media_files_file_hash ON media_files(file_hash)"))
                 conn.commit()
     except Exception as e:
         print(f"[Database] Schema compatibility warning: {e}")

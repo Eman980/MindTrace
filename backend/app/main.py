@@ -3,23 +3,18 @@ from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 
 from app.config import settings
-from app.database import engine, Base, SessionLocal
+from app.database import engine, Base
 from app.routers import auth, lectures, checkpoints, playback, misconceptions, dashboard, concepts, demo, workflow
-from app.services.seed_service import seed_demo_data
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Initialize DB tables
     Base.metadata.create_all(bind=engine)
-    
-    # Auto-seed initial demo user and lecture
-    db = SessionLocal()
     try:
-        seed_demo_data(db)
+        from migrate_add_file_hash import run_migration
+        run_migration()
     except Exception as e:
-        print(f"[Lifespan] Auto-seed notification: {e}")
-    finally:
-        db.close()
+        print(f"[Lifespan] Migration check: {e}")
         
     yield
 

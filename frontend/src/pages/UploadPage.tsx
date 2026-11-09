@@ -48,6 +48,29 @@ export const UploadPage: React.FC<UploadPageProps> = ({ setActiveTab, onLectureC
   const [currentStage, setCurrentStage] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [createdLectureId, setCreatedLectureId] = useState<number | null>(null);
+  const [isDuplicate, setIsDuplicate] = useState(false);
+  const [duplicateLectureData, setDuplicateLectureData] = useState<{
+    id: number;
+    title: string;
+    duration_seconds: number;
+    concepts_count: number;
+    message: string;
+  } | null>(null);
+
+  const handleResetUpload = () => {
+    setUploading(false);
+    setCurrentStage(0);
+    setSelectedFile(null);
+    setTitle('');
+    setDescription('');
+    setTranscriptText('');
+    setTranscriptFile(null);
+    setIsDuplicate(false);
+    setDuplicateLectureData(null);
+    setError(null);
+    setCreatedLectureId(null);
+    if (fileInputRef.current) fileInputRef.current.value = '';
+  };
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -131,8 +154,23 @@ export const UploadPage: React.FC<UploadPageProps> = ({ setActiveTab, onLectureC
 
       const res = await api.lectures.upload(formData);
       clearInterval(stageTimer);
-      setCurrentStage(7);
-      setCreatedLectureId(res.lecture_id);
+      if (res.is_duplicate) {
+        setIsDuplicate(true);
+        setDuplicateLectureData({
+          id: res.lecture_id,
+          title: res.title,
+          duration_seconds: res.duration_seconds || 0,
+          concepts_count: res.concepts_count || 0,
+          message: res.message || 'This lecture already exists in your library.'
+        });
+        setCreatedLectureId(res.lecture_id);
+        setCurrentStage(7);
+      } else {
+        setIsDuplicate(false);
+        setDuplicateLectureData(null);
+        setCurrentStage(7);
+        setCreatedLectureId(res.lecture_id);
+      }
     } catch (err: any) {
       clearInterval(stageTimer);
       setError(err.message || 'Upload and processing failed.');
@@ -153,6 +191,79 @@ export const UploadPage: React.FC<UploadPageProps> = ({ setActiveTab, onLectureC
       </div>
 
       {uploading ? (
+        isDuplicate && duplicateLectureData ? (
+          <div className="card" style={{ padding: '40px 32px', textAlign: 'center' }}>
+            <div
+              style={{
+                width: '64px',
+                height: '64px',
+                borderRadius: '50%',
+                background: 'var(--accent-soft)',
+                color: 'var(--primary-accent)',
+                display: 'inline-flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                marginBottom: '16px',
+              }}
+            >
+              <Info size={32} />
+            </div>
+
+            <h2 style={{ fontSize: '24px', fontWeight: 800, color: 'var(--primary-navy)', marginBottom: '8px' }}>
+              This lecture already exists in your library.
+            </h2>
+            <p style={{ fontSize: '14px', color: 'var(--text-muted)', maxWidth: '540px', margin: '0 auto 24px', lineHeight: 1.6 }}>
+              MindTrace detected identical file content via cryptographic SHA-256 verification.
+              No redundant records, transcriptions, or quizzes were created, and your existing study progress and MCQ answers remain preserved.
+            </p>
+
+            <div
+              style={{
+                background: 'var(--bg-subtle)',
+                border: '1px solid var(--border-subtle)',
+                borderRadius: 'var(--radius-lg)',
+                padding: '18px 24px',
+                maxWidth: '480px',
+                margin: '0 auto 32px',
+                textAlign: 'left',
+              }}
+            >
+              <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--accent-purple)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+                Existing Lecture In Library
+              </div>
+              <div style={{ fontSize: '17px', fontWeight: 800, color: 'var(--primary-navy)', marginTop: '4px' }}>
+                {duplicateLectureData.title}
+              </div>
+              <div style={{ fontSize: '13px', color: 'var(--text-muted)', marginTop: '6px', display: 'flex', gap: '16px' }}>
+                <span>{duplicateLectureData.concepts_count} Concepts</span>
+                <span>•</span>
+                <span>{Math.floor(duplicateLectureData.duration_seconds / 60)}m {Math.floor(duplicateLectureData.duration_seconds % 60)}s</span>
+                <span>•</span>
+                <span style={{ color: '#16A34A', fontWeight: 600 }}>Ready to Study</span>
+              </div>
+            </div>
+
+            <div style={{ display: 'flex', gap: '12px', justifyContent: 'center', flexWrap: 'wrap' }}>
+              <button
+                id="btn-open-existing-lecture"
+                className="btn btn-primary btn-lg"
+                style={{ display: 'inline-flex', alignItems: 'center', gap: '8px', padding: '12px 24px' }}
+                onClick={() => onLectureCreated(duplicateLectureData.id)}
+              >
+                <span>Open Existing Lecture</span>
+                <ArrowRight size={18} />
+              </button>
+              <button
+                id="btn-upload-different-lecture"
+                className="btn btn-secondary btn-lg"
+                style={{ padding: '12px 24px' }}
+                onClick={handleResetUpload}
+              >
+                <span>Upload Another Lecture</span>
+              </button>
+            </div>
+          </div>
+        ) : (
         <div className="card" style={{ padding: '36px', textAlign: 'center' }}>
           <h2 style={{ fontSize: '22px', fontWeight: 800, color: 'var(--primary-navy)', marginBottom: '8px' }}>
             {currentStage === 7 ? 'Processing Complete!' : 'Processing Lecture Recording'}
@@ -234,6 +345,7 @@ export const UploadPage: React.FC<UploadPageProps> = ({ setActiveTab, onLectureC
             </button>
           )}
         </div>
+        )
       ) : (
         <form onSubmit={handleSubmit} className="card" style={{ padding: '36px' }}>
           {error && (

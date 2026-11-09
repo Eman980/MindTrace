@@ -168,6 +168,7 @@ class MediaFileOut(BaseModel):
     file_size: int
     mime_type: str
     file_path: str
+    file_hash: Optional[str] = None
     
     class Config:
         from_attributes = True
@@ -183,6 +184,7 @@ class LectureOut(BaseModel):
     transcription_status: Optional[str] = "ready"
     processing_error: Optional[str] = None
     is_demo: bool
+    file_hash: Optional[str] = None
     created_at: datetime
     concepts_count: int = 0
     unresolved_count: int = 0
@@ -191,6 +193,17 @@ class LectureOut(BaseModel):
     
     class Config:
         from_attributes = True
+
+class LectureUploadOut(BaseModel):
+    success: bool
+    lecture_id: int
+    recording_id: int
+    title: str
+    status: str
+    duration_seconds: float
+    concepts_count: int
+    is_duplicate: bool = False
+    message: Optional[str] = None
 
 class LectureDetailOut(LectureOut):
     media_file: Optional[MediaFileOut] = None

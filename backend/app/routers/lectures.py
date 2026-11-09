@@ -1,11 +1,13 @@
 import os
 import uuid
+import hashlib
 import aiofiles
 from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, status, Request
 from fastapi.responses import StreamingResponse, FileResponse
 from sqlalchemy.orm import Session
 from sqlalchemy import desc
+from sqlalchemy.exc import IntegrityError
 
 from app.database import get_db
 from app.models.all_models import (
@@ -63,6 +65,7 @@ def list_lectures(db: Session = Depends(get_db), current_user: User = Depends(ge
             "media_type": lec.media_type,
             "status": lec.status,
             "is_demo": lec.is_demo,
+            "file_hash": lec.file_hash,
             "created_at": lec.created_at,
             "concepts_count": c_count,
             "unresolved_count": unresolved_count,
@@ -260,8 +263,9 @@ async def upload_lecture(
     unique_filename = f"{uuid.uuid4().hex}_{file.filename}"
     saved_file_path = os.path.join(settings.UPLOAD_DIR, unique_filename)
     
-    # Save uploaded file
+    # Save uploaded file and compute SHA-256 hash
     file_size = 0
+    hasher = hashlib.sha256()
     try:
         async with aiofiles.open(saved_file_path, "wb") as out_file:
             while content := await file.read(1024 * 1024):  # 1MB chunks
@@ -271,16 +275,60 @@ async def upload_lecture(
                         status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
                         detail=f"File exceeds maximum allowed size of {settings.MAX_FILE_SIZE_MB}MB."
                     )
+                hasher.update(content)
                 await out_file.write(content)
     except HTTPException:
         if os.path.exists(saved_file_path):
             os.remove(saved_file_path)
         raise
     except Exception as e:
+        if os.path.exists(saved_file_path):
+            os.remove(saved_file_path)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to store media file on server: {str(e)}"
         )
+
+    file_hash = hasher.hexdigest()
+
+    # Check for existing duplicate lecture by content SHA-256 hash for the current user
+    # If an existing lecture succeeded (status != "failed"), return it as a duplicate.
+    # If a previous attempt failed, clean up the failed record to allow a fresh retry.
+    existing_lecture = db.query(Lecture).filter(
+        Lecture.user_id == current_user.id,
+        Lecture.file_hash == file_hash,
+        Lecture.status != "failed"
+    ).first()
+    if existing_lecture:
+        # File is a duplicate! Remove redundant uploaded file to conserve disk space.
+        if os.path.exists(saved_file_path):
+            try:
+                os.remove(saved_file_path)
+            except OSError:
+                pass
+
+        return {
+            "success": True,
+            "is_duplicate": True,
+            "message": "This lecture already exists in your library.",
+            "lecture_id": existing_lecture.id,
+            "recording_id": existing_lecture.id,
+            "title": existing_lecture.title,
+            "status": existing_lecture.status,
+            "duration_seconds": existing_lecture.duration_seconds,
+            "concepts_count": len(existing_lecture.concepts)
+        }
+
+    # Clean up any lingering failed record for this user and hash before re-attempting
+    failed_prior = db.query(Lecture).filter(
+        Lecture.user_id == current_user.id,
+        Lecture.file_hash == file_hash,
+        Lecture.status == "failed"
+    ).all()
+    for fp in failed_prior:
+        db.delete(fp)
+    if failed_prior:
+        db.commit()
 
     # Read manual transcript if provided as file or text
     manual_transcript_content = None
@@ -293,7 +341,7 @@ async def upload_lecture(
     if not manual_transcript_content and transcript_text and transcript_text.strip():
         manual_transcript_content = transcript_text.strip()
 
-    # 2. Create Lecture Record
+    # 2. Create Lecture Record (safely handling simultaneous concurrent uploads)
     lecture = Lecture(
         user_id=current_user.id,
         title=title.strip(),
@@ -301,11 +349,41 @@ async def upload_lecture(
         description=description.strip() if description else f"Lecture recording uploaded on {file.filename}",
         media_type=media_type,
         status="processing",
-        is_demo=False
+        is_demo=False,
+        file_hash=file_hash
     )
     db.add(lecture)
-    db.commit()
-    db.refresh(lecture)
+    try:
+        db.commit()
+        db.refresh(lecture)
+    except IntegrityError:
+        db.rollback()
+        # Another simultaneous upload with the identical hash committed first
+        if os.path.exists(saved_file_path):
+            try:
+                os.remove(saved_file_path)
+            except OSError:
+                pass
+        existing_lecture = db.query(Lecture).filter(
+            Lecture.user_id == current_user.id,
+            Lecture.file_hash == file_hash
+        ).first()
+        if existing_lecture:
+            return {
+                "success": True,
+                "is_duplicate": True,
+                "message": "This lecture already exists in your library.",
+                "lecture_id": existing_lecture.id,
+                "recording_id": existing_lecture.id,
+                "title": existing_lecture.title,
+                "status": existing_lecture.status,
+                "duration_seconds": existing_lecture.duration_seconds,
+                "concepts_count": len(existing_lecture.concepts)
+            }
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A lecture with this file is already being processed."
+        )
 
     # 3. Store MediaFile Record
     media = MediaFile(
@@ -314,7 +392,8 @@ async def upload_lecture(
         stored_filename=unique_filename,
         file_path=saved_file_path,
         file_size=file_size,
-        mime_type=stored_mime_type
+        mime_type=stored_mime_type,
+        file_hash=file_hash
     )
     db.add(media)
     db.commit()
@@ -336,6 +415,8 @@ async def upload_lecture(
 
     return {
         "success": True,
+        "is_duplicate": False,
+        "message": "Lecture uploaded and processed successfully.",
         "lecture_id": lecture.id,
         "recording_id": lecture.id,
         "title": lecture.title,
@@ -346,13 +427,17 @@ async def upload_lecture(
 
 
 @router.post("/transcribe/{lecture_id}")
+@router.post("/transcribe/{lecture_id}")
 @router.post("/{lecture_id}/transcribe")
 async def transcribe_lecture_endpoint(
     lecture_id: int,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    lecture = db.query(Lecture).filter(Lecture.id == lecture_id).first()
+    lecture = db.query(Lecture).filter(
+        Lecture.id == lecture_id,
+        Lecture.user_id == current_user.id
+    ).first()
     if not lecture:
         raise HTTPException(status_code=404, detail=f"Recording/Lecture {lecture_id} not found.")
 
@@ -386,7 +471,10 @@ async def generate_lecture_endpoint(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    lecture = db.query(Lecture).filter(Lecture.id == lecture_id).first()
+    lecture = db.query(Lecture).filter(
+        Lecture.id == lecture_id,
+        Lecture.user_id == current_user.id
+    ).first()
     if not lecture:
         raise HTTPException(status_code=404, detail=f"Recording/Lecture {lecture_id} not found.")
 
@@ -410,7 +498,10 @@ def get_lecture_segments_endpoint(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    lecture = db.query(Lecture).filter(Lecture.id == lecture_id).first()
+    lecture = db.query(Lecture).filter(
+        Lecture.id == lecture_id,
+        Lecture.user_id == current_user.id
+    ).first()
     if not lecture:
         raise HTTPException(status_code=404, detail=f"Recording/Lecture {lecture_id} not found.")
 
@@ -443,7 +534,12 @@ def flag_concept_endpoint(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    concept = db.query(Concept).filter(Concept.id == concept_id).first()
+    concept = (
+        db.query(Concept)
+        .join(Lecture)
+        .filter(Concept.id == concept_id, Lecture.user_id == current_user.id)
+        .first()
+    )
     if not concept:
         raise HTTPException(status_code=404, detail="Concept not found.")
 
@@ -465,7 +561,12 @@ def replay_concept_endpoint(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    concept = db.query(Concept).filter(Concept.id == concept_id).first()
+    concept = (
+        db.query(Concept)
+        .join(Lecture)
+        .filter(Concept.id == concept_id, Lecture.user_id == current_user.id)
+        .first()
+    )
     if not concept:
         raise HTTPException(status_code=404, detail="Concept not found.")
 
@@ -488,7 +589,10 @@ def get_recording_report_endpoint(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    lecture = db.query(Lecture).filter(Lecture.id == recording_id).first()
+    lecture = db.query(Lecture).filter(
+        Lecture.id == recording_id,
+        Lecture.user_id == current_user.id
+    ).first()
     if not lecture:
         raise HTTPException(status_code=404, detail=f"Recording {recording_id} not found.")
 
@@ -658,7 +762,8 @@ def get_lecture(lecture_id: int, db: Session = Depends(get_db), current_user: Us
             "original_filename": lecture.media_file.original_filename,
             "file_size": lecture.media_file.file_size,
             "mime_type": lecture.media_file.mime_type,
-            "file_path": lecture.media_file.file_path
+            "file_path": lecture.media_file.file_path,
+            "file_hash": lecture.media_file.file_hash
         }
 
     return {
@@ -670,6 +775,7 @@ def get_lecture(lecture_id: int, db: Session = Depends(get_db), current_user: Us
         "media_type": lecture.media_type,
         "status": lecture.status,
         "is_demo": lecture.is_demo,
+        "file_hash": lecture.file_hash,
         "created_at": lecture.created_at,
         "concepts_count": len(concepts_out),
         "unresolved_count": unresolved_count,

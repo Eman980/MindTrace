@@ -409,7 +409,20 @@ async def resolve_misconception(
     Submits answer to the targeted review checkpoint.
     If answered accurately, updates status: High Priority -> Improving -> Resolved!
     """
-    checkpoint = db.query(Checkpoint).filter(Checkpoint.id == resolve_in.checkpoint_id).first()
+    misc = db.query(Misconception).filter(
+        Misconception.id == misconception_id,
+        Misconception.user_id == current_user.id
+    ).first()
+    if not misc:
+        raise HTTPException(status_code=404, detail="Misconception not found.")
+
+    checkpoint = (
+        db.query(Checkpoint)
+        .join(Concept)
+        .join(Lecture)
+        .filter(Checkpoint.id == resolve_in.checkpoint_id, Lecture.user_id == current_user.id)
+        .first()
+    )
     if not checkpoint:
         raise HTTPException(status_code=404, detail="Review checkpoint not found.")
         

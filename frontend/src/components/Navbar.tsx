@@ -8,7 +8,6 @@ import {
   AlertTriangle,
   TrendingUp,
   HelpCircle,
-  Layers,
   LogOut,
   User as UserIcon,
   BookOpen,
@@ -142,17 +141,6 @@ export const Navbar: React.FC<NavbarProps> = ({
                   <span>Progress</span>
                 </button>
               </li>
-              <li>
-                <button
-                  id="nav-fyp2-btn"
-                  className={`nav-item-btn ${activeTab === 'fyp2' ? 'active' : ''}`}
-                  onClick={() => setActiveTab('fyp2')}
-                  title="Platform Architecture"
-                >
-                  <Layers size={16} />
-                  <span>Architecture</span>
-                </button>
-              </li>
             </ul>
           </nav>
         ) : (
@@ -164,14 +152,6 @@ export const Navbar: React.FC<NavbarProps> = ({
                   onClick={() => setActiveTab('landing')}
                 >
                   Home
-                </button>
-              </li>
-              <li>
-                <button
-                  className={`nav-item-btn ${activeTab === 'fyp2' ? 'active' : ''}`}
-                  onClick={() => setActiveTab('fyp2')}
-                >
-                  Architecture
                 </button>
               </li>
             </ul>

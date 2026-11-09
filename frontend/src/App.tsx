@@ -11,7 +11,6 @@ import { MisconceptionsPage } from './pages/MisconceptionsPage';
 import { LedgerPage } from './pages/LedgerPage';
 import { ReviewPage } from './pages/ReviewPage';
 import { ProgressPage } from './pages/ProgressPage';
-import { FYP2RoadmapPage } from './pages/FYP2RoadmapPage';
 import { api } from './services/api';
 
 // ─── Inner app that consumes AuthContext ──────────────────────────────────────
@@ -198,8 +197,6 @@ const AppInner: React.FC = () => {
       case 'progress':
         return <ProgressPage onGoToLecture={handleSelectLecture} />;
 
-      case 'fyp2':
-        return <FYP2RoadmapPage />;
 
       default:
         return <LandingPage setActiveTab={setActiveTab} />;

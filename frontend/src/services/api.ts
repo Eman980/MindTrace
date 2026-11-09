@@ -61,10 +61,6 @@ export const api = {
         method: 'POST',
         body: JSON.stringify(data),
       }),
-    demoLogin: () =>
-      request<AuthResponse>('/auth/demo-login', {
-        method: 'POST',
-      }),
     getMe: () => request<User>('/auth/me'),
   },
 
@@ -76,7 +72,17 @@ export const api = {
     list: () => request<Lecture[]>('/lectures'),
     get: (id: number) => request<Lecture>(`/lectures/${id}`),
     upload: (formData: FormData) =>
-      request<{ success: boolean; lecture_id: number; title: string; status: string; concepts_count: number }>(
+      request<{
+        success: boolean;
+        lecture_id: number;
+        recording_id: number;
+        title: string;
+        status: string;
+        duration_seconds: number;
+        concepts_count: number;
+        is_duplicate?: boolean;
+        message?: string;
+      }>(
         '/lectures/upload',
         {
           method: 'POST',
