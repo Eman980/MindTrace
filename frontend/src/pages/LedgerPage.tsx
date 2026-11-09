@@ -659,7 +659,7 @@ export const LedgerPage: React.FC<LedgerPageProps> = ({ onGoToLecture, onReviewC
                               </div>
                               <div style={{ display: 'flex', alignItems: 'center', gap: '10px', color: 'var(--text-muted)', fontSize: '11px' }}>
                                 <span style={{ fontWeight: 600, color: 'var(--priority-high-text)' }}>
-                                  +{ev.points_added} pts
+                                  +{ev.points_added} severity
                                 </span>
                                 <span>{formatTimestamp(ev.created_at)}</span>
                               </div>

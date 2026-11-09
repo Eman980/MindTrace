@@ -205,7 +205,7 @@ def test_full_workflow():
 
     # 9. Verify Graceful Error Handling When No Speech & No Transcript
     print("\n[Step 9] Verifying Failure Mode on Empty Audio...")
-    empty_wav = io.BytesIO(b"RIFF\x24\x00\x00\x00WAVEfmt \x10\x00\x00\x00\x01\x00\x01\x00\x80>\x00\x00\x00}\x00\x00\x02\x00\x10\x00data\x00\x00\x00\x00")
+    empty_wav = io.BytesIO(b"RIFF\x28\x00\x00\x00WAVEfmt \x10\x00\x00\x00\x01\x00\x01\x00\x80>\x00\x00\x00}\x00\x00\x02\x00\x10\x00data\x04\x00\x00\x00\x00\x00\x00\x00")
     empty_wav.name = "untranscribable_silent.wav"
     fail_upload_resp = client.post(
         "/api/v1/lectures/upload",

@@ -79,13 +79,37 @@ The system processes uploaded recordings through a genuine multi-stage pipeline:
 
 ---
 
-## 5. Automated Verification Test Suite
+## 5. Sample Lecture & Lecture Management
 
-To verify all 12 stages of the complete workflow (including local Faster-Whisper transcription on real uploaded video):
+### Reset & Load Clean Sample Lecture
+To clean any test/demo data and load a pristine sample lecture (*Introduction to Functions*) with complete concept segmentation, diagnostic checkpoints/MCQs, and persistent misconception records:
+```powershell
+cd backend
+.\venv\Scripts\python.exe reset_sample_lecture.py
+```
+*(Optionally pass `--email user@example.com` to reset a specific student account).*
+
+### Password Recovery & SMTP Configuration
+To enable production email delivery for password recovery, set these optional variables in `backend/.env`:
+```env
+SMTP_SERVER="smtp.gmail.com"
+SMTP_PORT=587
+SMTP_USERNAME="your-email@gmail.com"
+SMTP_PASSWORD="your-app-password"
+SMTP_FROM_EMAIL="noreply@mindtrace.edu"
+SMTP_TLS=1
+FRONTEND_URL="http://localhost:5173"
+```
+*If SMTP is not configured, password reset tokens are logged to the backend server console and returned for seamless local testing without external email dependencies.*
+
+---
+
+## 6. Automated Verification Test Suite
+
+To verify all authentication error handling, lecture renaming, deletion cascades, dedicated misconceptions tracking, and multi-user isolation:
 
 ```powershell
 cd backend
-.\venv\Scripts\Activate.ps1
-python test_complete_workflow.py
+.\venv\Scripts\python.exe test_master_verification.py
 ```
 

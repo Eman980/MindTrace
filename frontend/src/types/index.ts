@@ -40,6 +40,7 @@ export interface CheckpointAttemptDetail {
   confidence_level?: number;
   explanation_text?: string;
   explanation_verdict?: string;
+  grade?: 'correct' | 'partial' | 'incorrect';
   attempt_number?: number;
   created_at: string;
   correct_answer?: string;
@@ -49,7 +50,9 @@ export interface CheckpointAttemptDetail {
 export interface Checkpoint {
   id: number;
   concept_id: number;
-  question_type: 'mcq' | 'short_answer';
+  question_type: 'mcq' | 'short' | 'short_answer' | 'scenario';
+  difficulty?: 'easy' | 'moderate';
+  scenario_text?: string;
   question_text: string;
   options: string[];
   explanation?: string;
@@ -81,6 +84,8 @@ export interface CheckpointEvaluation {
   points_awarded: number;
   misconception_created_or_updated: boolean;
   new_severity_level?: string;
+  grade?: 'correct' | 'partial' | 'incorrect';
+  missing_point?: string;
   explanation_verdict?: string;
   verdict_reason?: string;
   needs_followup?: boolean;
@@ -130,6 +135,8 @@ export interface Lecture {
   status: 'processing' | 'ready' | 'failed';
   processing_error?: string;
   is_demo: boolean;
+  prerequisite_lecture_id?: number | null;
+  prerequisite_lecture_title?: string | null;
   created_at: string;
   concepts_count: number;
   unresolved_count: number;
@@ -157,10 +164,14 @@ export interface Misconception {
   concept_name: string;
   title: string;
   summary?: string;
+  incorrect_understanding?: string;
+  correct_explanation?: string;
+  concept_start_time?: number;
+  concept_end_time?: number;
   severity_score: number;
   severity_level: 'Low' | 'Medium' | 'High';
   occurrence_count: number;
-  status: 'New' | 'Unresolved' | 'Improving' | 'Resolved';
+  status: 'Unresolved' | 'Needs Review' | 'In Progress' | 'Resolved' | string;
   first_detected: string;
   last_detected: string;
   evidence: MisconceptionEvidence[];

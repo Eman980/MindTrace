@@ -1,22 +1,32 @@
 import os
 import uuid
+import hashlib
 import aiofiles
 from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, status, Request
 from fastapi.responses import StreamingResponse, FileResponse
 from sqlalchemy.orm import Session
 from sqlalchemy import desc
+from sqlalchemy.exc import IntegrityError
 
 from app.database import get_db
 from app.models.all_models import (
     User, Lecture, MediaFile, Transcript, TranscriptSegment,
-    Concept, Checkpoint, CheckpointAttempt, Misconception, ConceptProgress
+    Concept, Checkpoint, CheckpointAttempt, Misconception, ConceptProgress, PlaybackEvent
 )
-from app.schemas.all_schemas import LectureOut, LectureDetailOut
+from app.schemas.all_schemas import (
+    LectureOut,
+    LectureDetailOut,
+    LectureUpdateIn,
+    PrerequisiteRecheckOut,
+    PrerequisiteRecheckSubmitIn,
+    PrerequisiteRecheckSubmitOut,
+)
 from app.utils.security import get_current_user
 from app.services.transcription_service import transcription_service
 from app.services.concept_segmentation_service import concept_segmentation_service
 from app.services.checkpoint_service import checkpoint_service
+from app.services.cross_topic_recheck_service import cross_topic_recheck_service
 from app.services.audio_gen import generate_sample_audio_if_needed
 from app.services.audio_processing_service import audio_processing_service
 from app.config import settings
@@ -54,6 +64,12 @@ def list_lectures(db: Session = Depends(get_db), current_user: User = Depends(ge
         else:
             avg_progress = 0
 
+        prereq_id = getattr(lec, "prerequisite_lecture_id", None)
+        prereq_title = None
+        if prereq_id:
+            p = db.query(Lecture).filter(Lecture.id == prereq_id).first()
+            prereq_title = p.title if p else None
+
         results.append({
             "id": lec.id,
             "title": lec.title,
@@ -63,6 +79,9 @@ def list_lectures(db: Session = Depends(get_db), current_user: User = Depends(ge
             "media_type": lec.media_type,
             "status": lec.status,
             "is_demo": lec.is_demo,
+            "file_hash": lec.file_hash,
+            "prerequisite_lecture_id": prereq_id,
+            "prerequisite_lecture_title": prereq_title,
             "created_at": lec.created_at,
             "concepts_count": c_count,
             "unresolved_count": unresolved_count,
@@ -74,7 +93,8 @@ def list_lectures(db: Session = Depends(get_db), current_user: User = Depends(ge
 async def transcribe_lecture_internal(
     lecture: Lecture,
     db: Session,
-    manual_transcript: Optional[str] = None
+    manual_transcript: Optional[str] = None,
+    audio_language: str = "en"
 ) -> dict:
     if not lecture.media_file or not os.path.exists(lecture.media_file.file_path):
         raise ValueError("Associated media file does not exist on server storage.")
@@ -90,7 +110,8 @@ async def transcribe_lecture_internal(
         title=lecture.title,
         detected_duration=detected_duration,
         manual_transcript=manual_transcript,
-        is_demo=lecture.is_demo
+        is_demo=lecture.is_demo,
+        audio_language=audio_language
     )
     lecture.duration_seconds = stt_result.get("duration", detected_duration or 300.0)
     lecture.transcription_status = "transcribed"
@@ -150,7 +171,7 @@ async def generate_concepts_for_lecture_internal(
     db.commit()
 
     concepts_out = []
-    total_chks = 0
+    saved_concepts = []
     for c_idx, c_info in enumerate(concepts_data):
         concept = Concept(
             lecture_id=lecture.id,
@@ -167,29 +188,7 @@ async def generate_concepts_for_lecture_internal(
         db.add(concept)
         db.commit()
         db.refresh(concept)
-
-        chk_list = await checkpoint_service.generate_item_family_for_concept(
-            concept_title=concept.title,
-            concept_description=concept.description,
-            transcript_text=concept.transcript_text or ""
-        )
-        total_chks += len(chk_list)
-        for q_idx, q_item in enumerate(chk_list):
-            chk = Checkpoint(
-                concept_id=concept.id,
-                question_type=q_item.get("question_type", "mcq"),
-                question_text=q_item["question_text"],
-                options=q_item.get("options", []),
-                correct_answer=q_item["correct_answer"],
-                explanation=q_item.get("explanation", ""),
-                order_index=q_item.get("order_index", q_idx),
-                is_review_checkpoint=q_item.get("is_review_checkpoint", False),
-                item_family_role=q_item.get("item_family_role", "original"),
-                target_misconception=q_item.get("target_misconception", None),
-                source_excerpt=q_item.get("source_excerpt", None),
-                source_timestamp=q_item.get("source_timestamp", None)
-            )
-            db.add(chk)
+        saved_concepts.append(concept)
 
         prog = ConceptProgress(
             user_id=user_id,
@@ -198,13 +197,58 @@ async def generate_concepts_for_lecture_internal(
             status="Not Started"
         )
         db.add(prog)
+    db.commit()
 
+    # Generate unified lecture checkpoints across types (MCQ, Short, Scenario) and difficulties (Easy, Moderate)
+    concept_dicts = [
+        {
+            "id": c.id,
+            "title": c.title,
+            "description": c.description,
+            "start_time": c.start_time,
+            "end_time": c.end_time,
+            "transcript_text": c.transcript_text or "",
+            "core_concepts": c.core_concepts,
+            "confusing_topics": c.confusing_topics
+        }
+        for c in saved_concepts
+    ]
+
+    chk_list = await checkpoint_service.generate_lecture_checkpoints(
+        concepts=concept_dicts,
+        full_transcript=lecture.transcript.full_text if lecture.transcript else "",
+        lecture_title=lecture.title
+    )
+
+    total_chks = len(chk_list)
+    for q_idx, q_item in enumerate(chk_list):
+        chk = Checkpoint(
+            concept_id=q_item["concept_id"],
+            question_type=q_item.get("question_type", "mcq"),
+            difficulty=q_item.get("difficulty", "easy"),
+            scenario_text=q_item.get("scenario_text"),
+            question_text=q_item["question_text"],
+            options=q_item.get("options", []),
+            correct_answer=q_item["correct_answer"],
+            explanation=q_item.get("explanation", ""),
+            order_index=q_item.get("order_index", q_idx),
+            is_review_checkpoint=q_item.get("is_review_checkpoint", False),
+            item_family_role=q_item.get("item_family_role", "original"),
+            target_misconception=q_item.get("target_misconception", None),
+            source_excerpt=q_item.get("source_excerpt", None),
+            source_timestamp=q_item.get("source_timestamp", None)
+        )
+        db.add(chk)
+    db.commit()
+
+    for c in saved_concepts:
+        db.refresh(c)
         concepts_out.append({
-            "id": concept.id,
-            "title": concept.title,
-            "start_time": concept.start_time,
-            "end_time": concept.end_time,
-            "checkpoints_count": len(chk_list)
+            "id": c.id,
+            "title": c.title,
+            "start_time": c.start_time,
+            "end_time": c.end_time,
+            "checkpoints_count": len(c.checkpoints)
         })
 
     lecture.status = "ready"
@@ -230,6 +274,8 @@ async def upload_lecture(
     description: Optional[str] = Form(""),
     transcript_text: Optional[str] = Form(None),
     transcript_file: Optional[UploadFile] = File(None),
+    audio_language: Optional[str] = Form("en"),
+    prerequisite_lecture_id: Optional[int] = Form(None),
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
@@ -260,8 +306,9 @@ async def upload_lecture(
     unique_filename = f"{uuid.uuid4().hex}_{file.filename}"
     saved_file_path = os.path.join(settings.UPLOAD_DIR, unique_filename)
     
-    # Save uploaded file
+    # Save uploaded file and compute SHA-256 hash
     file_size = 0
+    hasher = hashlib.sha256()
     try:
         async with aiofiles.open(saved_file_path, "wb") as out_file:
             while content := await file.read(1024 * 1024):  # 1MB chunks
@@ -271,16 +318,73 @@ async def upload_lecture(
                         status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
                         detail=f"File exceeds maximum allowed size of {settings.MAX_FILE_SIZE_MB}MB."
                     )
+                hasher.update(content)
                 await out_file.write(content)
     except HTTPException:
         if os.path.exists(saved_file_path):
             os.remove(saved_file_path)
         raise
     except Exception as e:
+        if os.path.exists(saved_file_path):
+            os.remove(saved_file_path)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to store media file on server: {str(e)}"
         )
+
+    file_hash = hasher.hexdigest()
+
+    # Validate prerequisite lecture if provided
+    validated_prereq_id = None
+    if prerequisite_lecture_id:
+        validated_prereq_id = validate_prerequisite_lecture(
+            db=db,
+            lecture_id=None,
+            prerequisite_id=prerequisite_lecture_id,
+            user_id=current_user.id
+        )
+
+    # Check for existing duplicate lecture by content SHA-256 hash for the current user
+    # If an existing lecture succeeded (status != "failed"), return it as a duplicate.
+    # If a previous attempt failed, clean up the failed record to allow a fresh retry.
+    existing_lecture = db.query(Lecture).filter(
+        Lecture.user_id == current_user.id,
+        Lecture.file_hash == file_hash,
+        Lecture.status != "failed"
+    ).first()
+    if existing_lecture:
+        if validated_prereq_id and not existing_lecture.prerequisite_lecture_id:
+            existing_lecture.prerequisite_lecture_id = validated_prereq_id
+            db.commit()
+        # File is a duplicate! Remove redundant uploaded file to conserve disk space.
+        if os.path.exists(saved_file_path):
+            try:
+                os.remove(saved_file_path)
+            except OSError:
+                pass
+
+        return {
+            "success": True,
+            "is_duplicate": True,
+            "message": "This lecture already exists in your library.",
+            "lecture_id": existing_lecture.id,
+            "recording_id": existing_lecture.id,
+            "title": existing_lecture.title,
+            "status": existing_lecture.status,
+            "duration_seconds": existing_lecture.duration_seconds,
+            "concepts_count": len(existing_lecture.concepts)
+        }
+
+    # Clean up any lingering failed record for this user and hash before re-attempting
+    failed_prior = db.query(Lecture).filter(
+        Lecture.user_id == current_user.id,
+        Lecture.file_hash == file_hash,
+        Lecture.status == "failed"
+    ).all()
+    for fp in failed_prior:
+        db.delete(fp)
+    if failed_prior:
+        db.commit()
 
     # Read manual transcript if provided as file or text
     manual_transcript_content = None
@@ -293,7 +397,7 @@ async def upload_lecture(
     if not manual_transcript_content and transcript_text and transcript_text.strip():
         manual_transcript_content = transcript_text.strip()
 
-    # 2. Create Lecture Record
+    # 2. Create Lecture Record (safely handling simultaneous concurrent uploads)
     lecture = Lecture(
         user_id=current_user.id,
         title=title.strip(),
@@ -301,11 +405,42 @@ async def upload_lecture(
         description=description.strip() if description else f"Lecture recording uploaded on {file.filename}",
         media_type=media_type,
         status="processing",
-        is_demo=False
+        is_demo=False,
+        file_hash=file_hash,
+        prerequisite_lecture_id=validated_prereq_id
     )
     db.add(lecture)
-    db.commit()
-    db.refresh(lecture)
+    try:
+        db.commit()
+        db.refresh(lecture)
+    except IntegrityError:
+        db.rollback()
+        # Another simultaneous upload with the identical hash committed first
+        if os.path.exists(saved_file_path):
+            try:
+                os.remove(saved_file_path)
+            except OSError:
+                pass
+        existing_lecture = db.query(Lecture).filter(
+            Lecture.user_id == current_user.id,
+            Lecture.file_hash == file_hash
+        ).first()
+        if existing_lecture:
+            return {
+                "success": True,
+                "is_duplicate": True,
+                "message": "This lecture already exists in your library.",
+                "lecture_id": existing_lecture.id,
+                "recording_id": existing_lecture.id,
+                "title": existing_lecture.title,
+                "status": existing_lecture.status,
+                "duration_seconds": existing_lecture.duration_seconds,
+                "concepts_count": len(existing_lecture.concepts)
+            }
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A lecture with this file is already being processed."
+        )
 
     # 3. Store MediaFile Record
     media = MediaFile(
@@ -314,14 +449,26 @@ async def upload_lecture(
         stored_filename=unique_filename,
         file_path=saved_file_path,
         file_size=file_size,
-        mime_type=stored_mime_type
+        mime_type=stored_mime_type,
+        file_hash=file_hash
     )
     db.add(media)
     db.commit()
 
     # 4. Execute Multi-stage Processing Pipeline
+    quality_warning = None
     try:
-        await transcribe_lecture_internal(lecture, db, manual_transcript=manual_transcript_content)
+        stt_result = await transcribe_lecture_internal(
+            lecture,
+            db,
+            manual_transcript=manual_transcript_content,
+            audio_language=audio_language or "en"
+        )
+        quality_warning = stt_result.get("quality_warning")
+        if quality_warning:
+            lecture.processing_error = quality_warning
+            db.commit()
+
         await generate_concepts_for_lecture_internal(lecture, current_user.id, db)
     except Exception as e:
         db.rollback()
@@ -336,6 +483,9 @@ async def upload_lecture(
 
     return {
         "success": True,
+        "is_duplicate": False,
+        "message": "Lecture uploaded and processed successfully.",
+        "quality_warning": quality_warning,
         "lecture_id": lecture.id,
         "recording_id": lecture.id,
         "title": lecture.title,
@@ -349,21 +499,26 @@ async def upload_lecture(
 @router.post("/{lecture_id}/transcribe")
 async def transcribe_lecture_endpoint(
     lecture_id: int,
+    audio_language: Optional[str] = "en",
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    lecture = db.query(Lecture).filter(Lecture.id == lecture_id).first()
+    lecture = db.query(Lecture).filter(
+        Lecture.id == lecture_id,
+        Lecture.user_id == current_user.id
+    ).first()
     if not lecture:
         raise HTTPException(status_code=404, detail=f"Recording/Lecture {lecture_id} not found.")
 
     try:
-        stt_result = await transcribe_lecture_internal(lecture, db)
+        stt_result = await transcribe_lecture_internal(lecture, db, audio_language=audio_language or "en")
         return {
             "success": True,
             "recording_id": lecture.id,
             "lecture_id": lecture.id,
             "transcription_status": "transcribed",
             "provider": stt_result["provider"],
+            "quality_warning": stt_result.get("quality_warning"),
             "full_text": stt_result["full_text"],
             "duration": lecture.duration_seconds,
             "word_count": stt_result["word_count"],
@@ -386,7 +541,10 @@ async def generate_lecture_endpoint(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    lecture = db.query(Lecture).filter(Lecture.id == lecture_id).first()
+    lecture = db.query(Lecture).filter(
+        Lecture.id == lecture_id,
+        Lecture.user_id == current_user.id
+    ).first()
     if not lecture:
         raise HTTPException(status_code=404, detail=f"Recording/Lecture {lecture_id} not found.")
 
@@ -410,7 +568,10 @@ def get_lecture_segments_endpoint(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    lecture = db.query(Lecture).filter(Lecture.id == lecture_id).first()
+    lecture = db.query(Lecture).filter(
+        Lecture.id == lecture_id,
+        Lecture.user_id == current_user.id
+    ).first()
     if not lecture:
         raise HTTPException(status_code=404, detail=f"Recording/Lecture {lecture_id} not found.")
 
@@ -443,7 +604,12 @@ def flag_concept_endpoint(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    concept = db.query(Concept).filter(Concept.id == concept_id).first()
+    concept = (
+        db.query(Concept)
+        .join(Lecture)
+        .filter(Concept.id == concept_id, Lecture.user_id == current_user.id)
+        .first()
+    )
     if not concept:
         raise HTTPException(status_code=404, detail="Concept not found.")
 
@@ -465,7 +631,12 @@ def replay_concept_endpoint(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    concept = db.query(Concept).filter(Concept.id == concept_id).first()
+    concept = (
+        db.query(Concept)
+        .join(Lecture)
+        .filter(Concept.id == concept_id, Lecture.user_id == current_user.id)
+        .first()
+    )
     if not concept:
         raise HTTPException(status_code=404, detail="Concept not found.")
 
@@ -488,7 +659,10 @@ def get_recording_report_endpoint(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    lecture = db.query(Lecture).filter(Lecture.id == recording_id).first()
+    lecture = db.query(Lecture).filter(
+        Lecture.id == recording_id,
+        Lecture.user_id == current_user.id
+    ).first()
     if not lecture:
         raise HTTPException(status_code=404, detail=f"Recording {recording_id} not found.")
 
@@ -550,9 +724,18 @@ def get_lecture(lecture_id: int, db: Session = Depends(get_db), current_user: Us
             ConceptProgress.user_id == current_user.id
         ).first()
         
-        # Checkpoints - expose all diagnostic questions (Original, Variant, Near-Transfer) with student attempt history
+        # Checkpoints - expose all diagnostic questions with student attempt history
+        # Sorted Easy first (0), then Moderate (1); within difficulty by timestamp / order_index
+        sorted_checkpoints = sorted(
+            c.checkpoints,
+            key=lambda q: (
+                0 if (getattr(q, "difficulty", "easy") or "easy").lower() == "easy" else 1,
+                q.source_timestamp or 0.0,
+                q.order_index or 0
+            )
+        )
         checkpoints_out = []
-        for chk in sorted(c.checkpoints, key=lambda q: (q.order_index or 0)):
+        for chk in sorted_checkpoints:
             chk_attempts = db.query(CheckpointAttempt).filter(
                 CheckpointAttempt.checkpoint_id == chk.id,
                 CheckpointAttempt.user_id == current_user.id
@@ -564,6 +747,7 @@ def get_lecture(lecture_id: int, db: Session = Depends(get_db), current_user: Us
                     "checkpoint_id": a.checkpoint_id,
                     "student_answer": a.student_answer,
                     "is_correct": a.is_correct,
+                    "grade": getattr(a, "grade", None),
                     "confidence_score": a.confidence_score,
                     "feedback_reason": a.feedback_reason,
                     "detected_misconception_note": a.detected_misconception_note,
@@ -583,6 +767,8 @@ def get_lecture(lecture_id: int, db: Session = Depends(get_db), current_user: Us
                 "id": chk.id,
                 "concept_id": chk.concept_id,
                 "question_type": chk.question_type,
+                "difficulty": getattr(chk, "difficulty", "easy") or "easy",
+                "scenario_text": getattr(chk, "scenario_text", None),
                 "question_text": chk.question_text,
                 "options": chk.options,
                 "explanation": chk.explanation,
@@ -658,8 +844,15 @@ def get_lecture(lecture_id: int, db: Session = Depends(get_db), current_user: Us
             "original_filename": lecture.media_file.original_filename,
             "file_size": lecture.media_file.file_size,
             "mime_type": lecture.media_file.mime_type,
-            "file_path": lecture.media_file.file_path
+            "file_path": lecture.media_file.file_path,
+            "file_hash": lecture.media_file.file_hash
         }
+
+    prereq_id = getattr(lecture, "prerequisite_lecture_id", None)
+    prereq_title = None
+    if prereq_id:
+        p_lec = db.query(Lecture).filter(Lecture.id == prereq_id).first()
+        prereq_title = p_lec.title if p_lec else None
 
     return {
         "id": lecture.id,
@@ -670,6 +863,9 @@ def get_lecture(lecture_id: int, db: Session = Depends(get_db), current_user: Us
         "media_type": lecture.media_type,
         "status": lecture.status,
         "is_demo": lecture.is_demo,
+        "file_hash": lecture.file_hash,
+        "prerequisite_lecture_id": prereq_id,
+        "prerequisite_lecture_title": prereq_title,
         "created_at": lecture.created_at,
         "concepts_count": len(concepts_out),
         "unresolved_count": unresolved_count,
@@ -737,6 +933,163 @@ def stream_media(lecture_id: int, request: Request, db: Session = Depends(get_db
 
     return FileResponse(file_path, media_type=mime_type, filename=lecture.media_file.original_filename)
 
+@router.delete("/all")
+def delete_all_lectures(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    """
+    Deletes all lecture records, associated concepts, checkpoints, transcript segments,
+    quiz attempts, and misconceptions for the authenticated student.
+    Does not delete user account or unrelated data.
+    """
+    # 1. Clean user misconceptions & evidence
+    user_misc = db.query(Misconception).filter(Misconception.user_id == current_user.id).all()
+    for m in user_misc:
+        db.delete(m)
+    db.flush()
+
+    # 2. Clean lectures
+    lectures = db.query(Lecture).filter(Lecture.user_id == current_user.id).all()
+    count = len(lectures)
+
+    # Clean prerequisite links first to avoid circular FK issues during bulk delete
+    db.query(Lecture).filter(Lecture.user_id == current_user.id).update(
+        {"prerequisite_lecture_id": None}, synchronize_session=False
+    )
+    db.flush()
+
+    for lec in lectures:
+        if lec.media_file and os.path.exists(lec.media_file.file_path):
+            try:
+                if not lec.is_demo and "intro_to_functions.wav" not in lec.media_file.file_path:
+                    os.remove(lec.media_file.file_path)
+            except Exception:
+                pass
+        db.delete(lec)
+    db.flush()
+
+    # 3. Clean remaining progress, playback events, attempts
+    db.query(ConceptProgress).filter(ConceptProgress.user_id == current_user.id).delete(synchronize_session=False)
+    db.query(PlaybackEvent).filter(PlaybackEvent.user_id == current_user.id).delete(synchronize_session=False)
+    db.query(CheckpointAttempt).filter(CheckpointAttempt.user_id == current_user.id).delete(synchronize_session=False)
+
+    db.commit()
+    return {
+        "success": True,
+        "message": f"Successfully deleted {count} lecture(s) and all associated study data.",
+        "deleted_count": count
+    }
+
+
+def validate_prerequisite_lecture(
+    db: Session,
+    lecture_id: Optional[int],
+    prerequisite_id: Optional[int],
+    user_id: int
+) -> Optional[int]:
+    """
+    Validates prerequisite lecture relationship:
+    1. Prerequisite must belong to the same student.
+    2. A lecture cannot be its own prerequisite.
+    3. Prevents circular links (e.g. A -> B and B -> A, or any cycle).
+    """
+    if prerequisite_id is None or prerequisite_id == 0:
+        return None
+
+    if lecture_id is not None and prerequisite_id == lecture_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="A lecture cannot be its own prerequisite."
+        )
+
+    prereq = db.query(Lecture).filter(
+        Lecture.id == prerequisite_id,
+        Lecture.user_id == user_id
+    ).first()
+    if not prereq:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Selected prerequisite lecture was not found in your library."
+        )
+
+    # Check for circular link (cycle detection)
+    if lecture_id is not None:
+        curr = prereq
+        visited = {lecture_id}
+        while curr and getattr(curr, "prerequisite_lecture_id", None):
+            if curr.prerequisite_lecture_id in visited:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Circular prerequisite link detected: lectures cannot circularly depend on each other."
+                )
+            visited.add(curr.prerequisite_lecture_id)
+            curr = db.query(Lecture).filter(
+                Lecture.id == curr.prerequisite_lecture_id,
+                Lecture.user_id == user_id
+            ).first()
+
+    return prerequisite_id
+
+
+@router.patch("/{lecture_id}")
+@router.put("/{lecture_id}")
+@router.patch("/{lecture_id}/rename")
+def rename_lecture(
+    lecture_id: int,
+    payload: LectureUpdateIn,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Updates an existing lecture's title, description, course code, or prerequisite link.
+    """
+    lecture = db.query(Lecture).filter(
+        Lecture.id == lecture_id,
+        Lecture.user_id == current_user.id
+    ).first()
+    if not lecture:
+        raise HTTPException(status_code=404, detail="Lecture not found.")
+
+    if payload.title is not None:
+        new_title = payload.title.strip()
+        if not new_title:
+            raise HTTPException(status_code=400, detail="Lecture title cannot be empty.")
+        lecture.title = new_title
+
+    if payload.description is not None:
+        lecture.description = payload.description.strip()
+    if payload.course_code is not None:
+        lecture.course_code = payload.course_code.strip()
+
+    # Update prerequisite_lecture_id if provided
+    fields_set = getattr(payload, "model_fields_set", None) or getattr(payload, "__fields_set__", set())
+    if "prerequisite_lecture_id" in fields_set:
+        validated_prereq_id = validate_prerequisite_lecture(
+            db=db,
+            lecture_id=lecture.id,
+            prerequisite_id=payload.prerequisite_lecture_id,
+            user_id=current_user.id
+        )
+        lecture.prerequisite_lecture_id = validated_prereq_id
+
+    db.commit()
+    db.refresh(lecture)
+
+    prereq_title = None
+    prereq_id = getattr(lecture, "prerequisite_lecture_id", None)
+    if prereq_id:
+        p_lec = db.query(Lecture).filter(Lecture.id == prereq_id).first()
+        prereq_title = p_lec.title if p_lec else None
+
+    return {
+        "success": True,
+        "message": "Lecture updated successfully.",
+        "id": lecture.id,
+        "title": lecture.title,
+        "course_code": lecture.course_code,
+        "description": lecture.description,
+        "prerequisite_lecture_id": prereq_id,
+        "prerequisite_lecture_title": prereq_title
+    }
+
 @router.delete("/{lecture_id}")
 def delete_lecture(lecture_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     lecture = db.query(Lecture).filter(
@@ -753,7 +1106,54 @@ def delete_lecture(lecture_id: int, db: Session = Depends(get_db), current_user:
                 os.remove(lecture.media_file.file_path)
         except Exception:
             pass
+
+    # Explicitly set prerequisite_lecture_id to NULL on any lectures that reference this one
+    db.query(Lecture).filter(Lecture.prerequisite_lecture_id == lecture_id).update(
+        {"prerequisite_lecture_id": None}, synchronize_session=False
+    )
             
     db.delete(lecture)
     db.commit()
     return {"success": True, "message": "Lecture deleted successfully."}
+
+
+@router.get("/{lecture_id}/rechecks", response_model=List[PrerequisiteRecheckOut])
+def get_lecture_rechecks(
+    lecture_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Returns prerequisite cross-topic recheck items if any concept in this lecture
+    depends on an earlier concept where the student has an open misconception.
+    """
+    return cross_topic_recheck_service.get_prerequisite_rechecks(
+        db=db,
+        user_id=current_user.id,
+        lecture_id=lecture_id,
+    )
+
+
+@router.post("/{lecture_id}/rechecks/submit", response_model=PrerequisiteRecheckSubmitOut)
+def submit_lecture_recheck(
+    lecture_id: int,
+    payload: PrerequisiteRecheckSubmitIn,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Evaluates and records student answer for a prerequisite recheck question.
+    Updates misconception status to Resolved if passed, or logs increased severity if failed.
+    """
+    try:
+        return cross_topic_recheck_service.submit_recheck_answer(
+            db=db,
+            user_id=current_user.id,
+            lecture_id=lecture_id,
+            misconception_id=payload.misconception_id,
+            checkpoint_id=payload.checkpoint_id,
+            student_answer=payload.student_answer,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+

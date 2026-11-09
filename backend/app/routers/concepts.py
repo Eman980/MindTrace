@@ -53,7 +53,12 @@ def get_concept_detail(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    concept = db.query(Concept).filter(Concept.id == concept_id).first()
+    concept = (
+        db.query(Concept)
+        .join(Lecture)
+        .filter(Concept.id == concept_id, Lecture.user_id == current_user.id)
+        .first()
+    )
     if not concept:
         raise HTTPException(status_code=404, detail="Concept not found.")
         

@@ -7,15 +7,26 @@ class Settings(BaseSettings):
     API_V1_PREFIX: str = "/api/v1"
 
     # Database
-    DATABASE_URL: str = os.getenv("DATABASE_URL", "sqlite:///./mindtrace.db")
+    DEFAULT_DB_PATH: str = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "mindtrace.db")
+    DATABASE_URL: str = os.getenv("DATABASE_URL", f"sqlite:///{DEFAULT_DB_PATH}")
 
     # Security & Auth
     SECRET_KEY: str = os.getenv("SECRET_KEY", "mindtrace_fyp_university_secret_key_change_in_prod_2026")
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24 * 7  # 7 days
 
+    # SMTP / Email Service Configuration (Optional - for Password Reset)
+    SMTP_SERVER: str = os.getenv("SMTP_SERVER", "")
+    SMTP_PORT: int = int(os.getenv("SMTP_PORT", "587"))
+    SMTP_USERNAME: str = os.getenv("SMTP_USERNAME", "")
+    SMTP_PASSWORD: str = os.getenv("SMTP_PASSWORD", "")
+    SMTP_FROM_EMAIL: str = os.getenv("SMTP_FROM_EMAIL", "noreply@mindtrace.edu")
+    SMTP_TLS: bool = bool(int(os.getenv("SMTP_TLS", "1")))
+    FRONTEND_URL: str = os.getenv("FRONTEND_URL", "http://localhost:5173")
+
     # External APIs
     OPENAI_API_KEY: str = os.getenv("OPENAI_API_KEY", "")
+    GROQ_API_KEY: str = os.getenv("GROQ_API_KEY", "")
 
     # Storage
     UPLOAD_DIR: str = os.getenv("UPLOAD_DIR", os.path.join(os.path.dirname(os.path.dirname(__file__)), "uploads"))
@@ -61,6 +72,23 @@ class Settings(BaseSettings):
     class Config:
         env_file = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".env")
         extra = "allow"
+
+    @property
+    def DATABASE_URL_NORMALIZED(self) -> str:
+        url = self.DATABASE_URL
+        if url.startswith("sqlite:///./"):
+            rel_file = url[len("sqlite:///./"):]
+            backend_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+            abs_file = os.path.join(backend_dir, rel_file)
+            return f"sqlite:///{abs_file}"
+        return url
+
+    @property
+    def UPLOAD_DIR_NORMALIZED(self) -> str:
+        if self.UPLOAD_DIR == "./uploads" or not os.path.isabs(self.UPLOAD_DIR):
+            backend_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+            return os.path.abspath(os.path.join(backend_dir, self.UPLOAD_DIR))
+        return self.UPLOAD_DIR
 
     @property
     def effective_delay_hours(self) -> float:

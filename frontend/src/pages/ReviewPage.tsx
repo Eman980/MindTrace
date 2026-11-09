@@ -124,7 +124,7 @@ export const ReviewPage: React.FC<ReviewPageProps> = ({
           <span>Back to Misconceptions</span>
         </button>
         <span className={`badge ${misconception.severity_level === 'High' ? 'badge-high' : misconception.severity_level === 'Medium' ? 'badge-medium' : 'badge-low'}`}>
-          Current Severity: {misconception.severity_level} ({misconception.severity_score} pts)
+          Current Severity: {misconception.severity_level} ({misconception.severity_score}/100)
         </span>
       </div>
 

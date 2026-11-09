@@ -1,4 +1,6 @@
 import os
+import re
+import asyncio
 import httpx
 from typing import Dict, Any, List, Optional
 from app.config import settings
@@ -42,12 +44,14 @@ SAMPLE_FUNCTION_TRANSCRIPT = [
     }
 ]
 
-import re
-import asyncio
+# Domain-specific prompt hint to ground Whisper's vocabulary and suppress hallucinations
+COMPUTER_SCIENCE_PROMPT = (
+    "Computer science university lecture about programming concepts, recursion, "
+    "base cases, recursive calls, functions, parameters, return values, call stack, algorithms."
+)
 
 class TranscriptionService:
     def __init__(self):
-        self.api_key = settings.OPENAI_API_KEY
         self._whisper_model = None
         self._loaded_model_size = None
         self._model_size = os.getenv("WHISPER_MODEL_SIZE", "base")
@@ -55,7 +59,7 @@ class TranscriptionService:
     def get_whisper_model(self, model_size: Optional[str] = None):
         """
         Loads and caches the local faster-whisper model on CPU using INT8 quantization.
-        Completely offline, 100% free, requires NO OpenAI API key or paid subscription.
+        Runs offline without external API costs.
         """
         target_size = model_size or self._model_size
         if self._whisper_model is None or self._loaded_model_size != target_size:
@@ -66,9 +70,149 @@ class TranscriptionService:
             print(f"[LocalSTT] Local model '{target_size}' loaded and ready for transcription.")
         return self._whisper_model
 
-    def _transcribe_locally_sync(self, audio_path: str, model_size: Optional[str] = None) -> Dict[str, Any]:
+    def check_transcript_quality(self, full_text: str, segments: List[Dict[str, Any]]) -> Optional[str]:
         """
-        Performs synchronous speech-to-text using local Faster-Whisper on CPU.
+        Basic sanity check after transcription:
+        1. Checks for Cyrillic / non-Latin characters (hallucination sign in silence/noise).
+        2. Checks for extremely short transcripts (< 10 words).
+        Returns a human-readable warning message if quality is suspicious, else None.
+        """
+        if not full_text:
+            return "Transcript quality is low: no audible speech detected in the recording."
+
+        # Detect Cyrillic characters (Russian, Bulgarian, etc. often hallucinated by Whisper on noise)
+        cyrillic_chars = re.findall(r'[\u0400-\u04FF]', full_text)
+        if len(cyrillic_chars) >= 2:
+            return "Transcript quality is low: unexpected foreign characters detected (potential silence hallucination)."
+
+        # Check for extremely short transcripts (< 10 words)
+        if len(full_text.split()) < 10:
+            return "Transcript quality is low: very short audio or minimal audible speech detected."
+
+        # Check for repetitive loops (Whisper getting stuck on a single hallucinated phrase)
+        words = full_text.lower().split()
+        if len(words) >= 20:
+            first_phrase = " ".join(words[:4])
+            phrase_occurrences = full_text.lower().count(first_phrase)
+            if phrase_occurrences >= 5:
+                return "Transcript quality is low: repetitive phrases detected in audio processing."
+
+        return None
+
+    async def _transcribe_with_groq(
+        self,
+        file_path: str,
+        audio_language: str = "en"
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Transcribes or translates audio via Groq Cloud Whisper API.
+        For Urdu / Mixed Urdu-English:
+          Uses the /audio/translations endpoint with 'whisper-large-v3' (translates to English).
+          Note: 'whisper-large-v3-turbo' DOES NOT support translation on Groq.
+        For English:
+          Uses the /audio/transcriptions endpoint with 'whisper-large-v3'.
+        """
+        groq_key = settings.GROQ_API_KEY.strip()
+        if not groq_key:
+            return None
+
+        if not os.path.exists(file_path):
+            return None
+
+        file_size = os.path.getsize(file_path)
+        # Groq payload limit is 25MB
+        if file_size > 25 * 1024 * 1024:
+            print(f"[GroqWhisper] File size {file_size} exceeds 25MB Groq limit; falling back to local model.")
+            return None
+
+        is_urdu_or_mixed = audio_language.lower().strip() in ["ur", "urdu", "mixed", "ur-en", "urdu/mixed"]
+
+        if is_urdu_or_mixed:
+            # Translation endpoint converts Urdu speech to English text
+            url = "https://api.groq.com/openai/v1/audio/translations"
+            model_name = "whisper-large-v3"  # Only whisper-large-v3 supports translations on Groq!
+        else:
+            # Transcription endpoint for pure English lectures
+            url = "https://api.groq.com/openai/v1/audio/transcriptions"
+            model_name = "whisper-large-v3"
+
+        ext = os.path.splitext(file_path)[1].lower()
+        mime_map = {
+            ".wav": "audio/wav",
+            ".mp3": "audio/mpeg",
+            ".m4a": "audio/mp4",
+            ".ogg": "audio/ogg",
+            ".webm": "audio/webm",
+            ".mp4": "video/mp4",
+            ".mov": "video/quicktime",
+        }
+        mime = mime_map.get(ext, "application/octet-stream")
+
+        headers = {
+            "Authorization": f"Bearer {groq_key}",
+        }
+
+        try:
+            print(f"[GroqWhisper] Sending audio to Groq ({model_name}, mode={'translation' if is_urdu_or_mixed else 'transcription'})...")
+            async with httpx.AsyncClient(timeout=180.0) as client:
+                with open(file_path, "rb") as f:
+                    files = {"file": (os.path.basename(file_path), f, mime)}
+                    data: Dict[str, Any] = {
+                        "model": model_name,
+                        "prompt": COMPUTER_SCIENCE_PROMPT,
+                        "temperature": "0",  # Greedy decoding reduces silence hallucinations
+                        "response_format": "verbose_json",
+                    }
+                    if not is_urdu_or_mixed:
+                        data["language"] = "en"
+
+                    response = await client.post(url, headers=headers, files=files, data=data)
+
+            if response.status_code != 200:
+                print(f"[GroqWhisper] HTTP error {response.status_code}: {response.text}")
+                return None
+
+            resp_json = response.json()
+            raw_segments = resp_json.get("segments", [])
+
+            segments = []
+            for idx, seg in enumerate(raw_segments):
+                text = seg.get("text", "").strip()
+                if text:
+                    segments.append({
+                        "start_time": round(float(seg.get("start", 0.0)), 2),
+                        "end_time": round(float(seg.get("end", 0.0)), 2),
+                        "text": text,
+                        "speaker": "Instructor",
+                        "segment_index": idx
+                    })
+
+            full_text = resp_json.get("text", "").strip()
+            if not full_text and segments:
+                full_text = " ".join(s["text"] for s in segments)
+
+            duration = float(resp_json.get("duration", segments[-1]["end_time"] if segments else 0.0))
+
+            return {
+                "provider": f"Groq Whisper ({model_name} {'Translation' if is_urdu_or_mixed else 'Transcription'})",
+                "full_text": full_text,
+                "word_count": len(full_text.split()),
+                "duration": round(duration, 2),
+                "language": "en",
+                "segments": segments
+            }
+        except Exception as e:
+            print(f"[GroqWhisper] API request failed: {e}. Falling back to local Faster-Whisper.")
+            return None
+
+    def _transcribe_locally_sync(
+        self,
+        audio_path: str,
+        audio_language: str = "en",
+        model_size: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        Performs synchronous speech-to-text / translation using local Faster-Whisper on CPU.
         """
         if not os.path.exists(audio_path):
             raise FileNotFoundError(f"Media file not found for transcription: {audio_path}")
@@ -77,20 +221,37 @@ class TranscriptionService:
         if file_size < 100:
             raise ValueError("Uploaded audio file is empty or corrupted.")
 
+        is_urdu_or_mixed = audio_language.lower().strip() in ["ur", "urdu", "mixed", "ur-en", "urdu/mixed"]
+
+        task = "translate" if is_urdu_or_mixed else "transcribe"
+        language = "ur" if is_urdu_or_mixed else "en"
+
         try:
             model = self.get_whisper_model(model_size)
             segments_gen, info = model.transcribe(
                 audio_path,
+                task=task,
+                language=language,
+                initial_prompt=COMPUTER_SCIENCE_PROMPT,
+                temperature=0.0,
                 beam_size=3,
                 vad_filter=True,
-                vad_parameters=dict(min_silence_duration_ms=400)
+                vad_parameters=dict(min_silence_duration_ms=500)
             )
             raw_segments = list(segments_gen)
         except Exception as e:
             print(f"[LocalSTT] Transcription with model '{model_size or self._model_size}' failed: {e}. Trying tiny model fallback...")
             try:
                 model = self.get_whisper_model("tiny")
-                segments_gen, info = model.transcribe(audio_path, beam_size=1, vad_filter=True)
+                segments_gen, info = model.transcribe(
+                    audio_path,
+                    task=task,
+                    language=language,
+                    initial_prompt=COMPUTER_SCIENCE_PROMPT,
+                    temperature=0.0,
+                    beam_size=1,
+                    vad_filter=True
+                )
                 raw_segments = list(segments_gen)
             except Exception as e2:
                 raise ValueError(
@@ -106,7 +267,7 @@ class TranscriptionService:
                     "start_time": round(float(seg.start), 2),
                     "end_time": round(float(seg.end), 2),
                     "text": text,
-                    "speaker": "Speaker 1",
+                    "speaker": "Instructor",
                     "segment_index": idx
                 })
 
@@ -119,12 +280,14 @@ class TranscriptionService:
                 "Please ensure the recording contains audible lecture dialogue, or provide an accompanying transcript."
             )
 
+        provider_label = f"Local Faster-Whisper ({self._loaded_model_size} CPU - {'Translation' if is_urdu_or_mixed else 'Transcription'})"
+
         return {
-            "provider": f"Local Faster-Whisper ({self._loaded_model_size} CPU)",
+            "provider": provider_label,
             "full_text": full_text,
             "word_count": len(full_text.split()),
             "duration": round(detected_dur, 2),
-            "language": info.language if hasattr(info, "language") else "en",
+            "language": "en",
             "segments": segments
         }
 
@@ -135,20 +298,25 @@ class TranscriptionService:
         title: str = "",
         detected_duration: Optional[float] = None,
         manual_transcript: Optional[str] = None,
-        is_demo: bool = False
+        is_demo: bool = False,
+        audio_language: str = "en"
     ) -> Dict[str, Any]:
         """
         Transcribe audio recording:
         1. If manual transcript text or subtitle file is provided, parses genuine timestamped utterances.
         2. If demo lecture, uses pre-seeded CS101 Functions transcript.
-        3. Local Faster-Whisper speech-to-text (100% Free, runs offline on CPU, NO OpenAI API key needed).
+        3. If Groq API key is present: runs Groq Whisper Translation (whisper-large-v3) or Transcription.
+        4. Fallback / offline: Local Faster-Whisper with explicit translation/transcription task and temperature=0.
+        5. Performs post-transcription sanity check and attaches quality warning if noise is detected.
         """
         # 1. Manual transcript provided during upload
         if manual_transcript and manual_transcript.strip():
-            return self.parse_manual_transcript(
+            result = self.parse_manual_transcript(
                 manual_transcript.strip(),
                 duration=detected_duration or 120.0
             )
+            result["quality_warning"] = self.check_transcript_quality(result["full_text"], result["segments"])
+            return result
 
         # 2. Pre-seeded demo lecture
         is_sample_function_seed = (
@@ -172,12 +340,22 @@ class TranscriptionService:
                 "full_text": full_text,
                 "word_count": len(full_text.split()),
                 "duration": 420.0,
-                "segments": segments
+                "segments": segments,
+                "quality_warning": None
             }
 
-        # 3. Local Faster-Whisper STT (non-blocking thread on CPU)
-        print(f"[TranscriptionService] Processing '{filename or os.path.basename(file_path)}' via Local Faster-Whisper...")
-        return await asyncio.to_thread(self._transcribe_locally_sync, file_path)
+        # 3. Try Groq Whisper Cloud (fast, high accuracy, whisper-large-v3 translation)
+        if settings.GROQ_API_KEY and settings.GROQ_API_KEY.strip():
+            groq_res = await self._transcribe_with_groq(file_path, audio_language=audio_language)
+            if groq_res:
+                groq_res["quality_warning"] = self.check_transcript_quality(groq_res["full_text"], groq_res["segments"])
+                return groq_res
+
+        # 4. Local Faster-Whisper (non-blocking thread on CPU)
+        print(f"[TranscriptionService] Processing '{filename or os.path.basename(file_path)}' via Local Faster-Whisper (mode: {audio_language})...")
+        local_res = await asyncio.to_thread(self._transcribe_locally_sync, file_path, audio_language)
+        local_res["quality_warning"] = self.check_transcript_quality(local_res["full_text"], local_res["segments"])
+        return local_res
 
     def parse_manual_transcript(self, raw_text: str, duration: float) -> Dict[str, Any]:
         """
@@ -232,6 +410,7 @@ class TranscriptionService:
                 ts_line = lines[0]
                 text = " ".join(" ".join(lines[1:]).strip().split())
                 ts_parts = ts_line.split('-->')
+
                 def parse_vtt_time(s):
                     s = s.strip()
                     parts = s.split(':')
@@ -265,7 +444,6 @@ class TranscriptionService:
         if not sentences:
             sentences = [clean_text]
 
-        # Group sentences into cohesive chunks (2-3 sentences each)
         chunk_size = 2 if len(sentences) <= 8 else 3
         chunks = []
         for i in range(0, len(sentences), chunk_size):
@@ -295,60 +473,5 @@ class TranscriptionService:
             "duration": target_duration,
             "segments": segments
         }
-
-    async def _transcribe_with_openai(self, file_path: str) -> Dict[str, Any]:
-        url = "https://api.openai.com/v1/audio/transcriptions"
-        headers = {"Authorization": f"Bearer {self.api_key}"}
-        
-        ext = os.path.splitext(file_path)[1].lower()
-        mime_map = {
-            ".ogg": "audio/ogg",
-            ".mp3": "audio/mpeg",
-            ".wav": "audio/wav",
-            ".m4a": "audio/mp4",
-            ".webm": "audio/webm",
-            ".mp4": "video/mp4",
-            ".mov": "video/quicktime",
-        }
-        mime = mime_map.get(ext, "application/octet-stream")
-
-        async with httpx.AsyncClient(timeout=120.0) as client:
-            with open(file_path, "rb") as f:
-                files = {"file": (os.path.basename(file_path), f, mime)}
-                data = {
-                    "model": "whisper-1",
-                    "response_format": "verbose_json"
-                }
-                response = await client.post(url, headers=headers, files=files, data=data)
-                
-            if response.status_code == 200:
-                resp_json = response.json()
-                raw_segments = resp_json.get("segments", [])
-                
-                segments = []
-                for idx, seg in enumerate(raw_segments):
-                    segments.append({
-                        "start_time": float(seg.get("start", 0.0)),
-                        "end_time": float(seg.get("end", 0.0)),
-                        "text": seg.get("text", "").strip(),
-                        "speaker": "Speaker 1",
-                        "segment_index": idx
-                    })
-                    
-                full_text = resp_json.get("text", "")
-                word_count = len(full_text.split())
-                duration = float(resp_json.get("duration", segments[-1]["end_time"] if segments else 0.0))
-                
-                return {
-                    "provider": "OpenAI Whisper",
-                    "full_text": full_text,
-                    "word_count": word_count,
-                    "duration": duration,
-                    "segments": segments
-                }
-            else:
-                raise Exception(f"OpenAI STT returned HTTP {response.status_code}: {response.text}")
-
-    pass
 
 transcription_service = TranscriptionService()

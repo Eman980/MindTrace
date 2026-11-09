@@ -6,7 +6,7 @@ from sqlalchemy import desc
 
 from app.database import get_db
 from app.models.all_models import (
-    Checkpoint, CheckpointAttempt, Concept, User, ConceptProgress, Misconception
+    Checkpoint, CheckpointAttempt, Concept, User, ConceptProgress, Misconception, Lecture
 )
 from app.schemas.all_schemas import CheckpointAnswerIn, CheckpointEvaluationOut
 from app.services.evaluation_service import evaluation_service
@@ -140,11 +140,17 @@ async def submit_checkpoint_answer(
       - Any new wrong after Resolved → Recurred
     """
     # ── 1. Fetch checkpoint & concept ────────────────────────────────────────
-    checkpoint = db.query(Checkpoint).filter(Checkpoint.id == answer_in.checkpoint_id).first()
+    checkpoint = (
+        db.query(Checkpoint)
+        .join(Concept)
+        .join(Lecture)
+        .filter(Checkpoint.id == answer_in.checkpoint_id, Lecture.user_id == current_user.id)
+        .first()
+    )
     if not checkpoint:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Checkpoint not found.")
 
-    concept = db.query(Concept).filter(Concept.id == checkpoint.concept_id).first()
+    concept = checkpoint.concept
     if not concept:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Associated concept not found.")
 
@@ -388,7 +394,13 @@ def get_checkpoint_attempts(
     current_user: User = Depends(get_current_user),
 ):
     """Returns all saved attempts by the current user for this checkpoint."""
-    checkpoint = db.query(Checkpoint).filter(Checkpoint.id == checkpoint_id).first()
+    checkpoint = (
+        db.query(Checkpoint)
+        .join(Concept)
+        .join(Lecture)
+        .filter(Checkpoint.id == checkpoint_id, Lecture.user_id == current_user.id)
+        .first()
+    )
     if not checkpoint:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Checkpoint not found.")
 

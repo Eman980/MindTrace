@@ -12,6 +12,21 @@ class UserLogin(BaseModel):
     email: EmailStr
     password: str
 
+class ForgotPasswordIn(BaseModel):
+    email: EmailStr
+
+class ResetPasswordIn(BaseModel):
+    token: str
+    new_password: str = Field(..., min_length=8)
+    confirm_password: str
+
+class ForgotPasswordOut(BaseModel):
+    success: bool
+    message: str
+    email_sent: bool = False
+    reset_token: Optional[str] = None
+    note: Optional[str] = None
+
 class UserOut(BaseModel):
     id: int
     email: EmailStr
@@ -67,6 +82,7 @@ class CheckpointAttemptDetailOut(BaseModel):
     confidence_level: Optional[int] = None
     explanation_text: Optional[str] = None
     explanation_verdict: Optional[str] = None
+    grade: Optional[str] = None
     attempt_number: int = 1
     created_at: datetime
     correct_answer: Optional[str] = None
@@ -89,6 +105,8 @@ class CheckpointOut(BaseModel):
     target_misconception: Optional[str] = None
     source_excerpt: Optional[str] = None
     source_timestamp: Optional[float] = None
+    difficulty: Optional[str] = "easy"
+    scenario_text: Optional[str] = None
     attempts: List[CheckpointAttemptDetailOut] = []
     latest_attempt: Optional[CheckpointAttemptDetailOut] = None
     
@@ -116,6 +134,8 @@ class CheckpointEvaluationOut(BaseModel):
     points_awarded: int = 0
     misconception_created_or_updated: bool = False
     new_severity_level: Optional[str] = None
+    grade: Optional[str] = None
+    missing_point: Optional[str] = None
     # ── Misconception Deep Treatment Breakdown ────────────────────────────────
     conceptual_trap: Optional[str] = None
     correct_mental_model: Optional[str] = None
@@ -168,6 +188,7 @@ class MediaFileOut(BaseModel):
     file_size: int
     mime_type: str
     file_path: str
+    file_hash: Optional[str] = None
     
     class Config:
         from_attributes = True
@@ -183,6 +204,9 @@ class LectureOut(BaseModel):
     transcription_status: Optional[str] = "ready"
     processing_error: Optional[str] = None
     is_demo: bool
+    file_hash: Optional[str] = None
+    prerequisite_lecture_id: Optional[int] = None
+    prerequisite_lecture_title: Optional[str] = None
     created_at: datetime
     concepts_count: int = 0
     unresolved_count: int = 0
@@ -191,6 +215,23 @@ class LectureOut(BaseModel):
     
     class Config:
         from_attributes = True
+
+class LectureUploadOut(BaseModel):
+    success: bool
+    lecture_id: int
+    recording_id: int
+    title: str
+    status: str
+    duration_seconds: float
+    concepts_count: int
+    is_duplicate: bool = False
+    message: Optional[str] = None
+
+class LectureUpdateIn(BaseModel):
+    title: Optional[str] = None
+    description: Optional[str] = None
+    course_code: Optional[str] = None
+    prerequisite_lecture_id: Optional[int] = None
 
 class LectureDetailOut(LectureOut):
     media_file: Optional[MediaFileOut] = None
@@ -245,10 +286,14 @@ class MisconceptionOut(BaseModel):
     concept_name: str
     title: str
     summary: Optional[str] = None
+    incorrect_understanding: Optional[str] = None
+    correct_explanation: Optional[str] = None
+    concept_start_time: Optional[float] = None
+    concept_end_time: Optional[float] = None
     severity_score: int
     severity_level: str  # Low, Medium, High
     occurrence_count: int
-    status: str          # New, Unresolved, Improving, Resolved (legacy UI field)
+    status: str          # Unresolved, Needs Review, In Progress, Resolved
     first_detected: datetime
     last_detected: datetime
     evidence: List[MisconceptionEvidenceOut] = []
@@ -261,6 +306,9 @@ class MisconceptionOut(BaseModel):
 
     class Config:
         from_attributes = True
+
+class MisconceptionStatusUpdateIn(BaseModel):
+    status: str
 
 class MisconceptionReviewOut(BaseModel):
     misconception: MisconceptionOut
@@ -333,3 +381,39 @@ class MisconceptionLedgerItemOut(MisconceptionOut):
     remediation_start_time: Optional[float] = None
     remediation_end_time: Optional[float] = None
     attempts: List[LedgerAttemptOut] = []
+
+
+# --- Cross-Topic Prerequisite Re-Checking ---
+class PrerequisiteRecheckQuestionOut(BaseModel):
+    id: int
+    concept_id: int
+    question_type: str
+    question_text: str
+    options: List[str] = []
+    explanation: Optional[str] = None
+    item_family_role: Optional[str] = "variant"
+
+class PrerequisiteRecheckOut(BaseModel):
+    misconception_id: int
+    misconception_title: str
+    earlier_lecture_id: int
+    earlier_lecture_title: str
+    earlier_concept_id: int
+    earlier_concept_name: str
+    dependent_concept_name: str
+    question: PrerequisiteRecheckQuestionOut
+
+class PrerequisiteRecheckSubmitIn(BaseModel):
+    misconception_id: int
+    checkpoint_id: int
+    student_answer: str
+
+class PrerequisiteRecheckSubmitOut(BaseModel):
+    is_correct: bool
+    correct_answer: Optional[str] = None
+    explanation: Optional[str] = None
+    new_status: str
+    new_severity_level: str
+    new_severity_score: int
+    message: str
+

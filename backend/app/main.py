@@ -3,24 +3,13 @@ from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 
 from app.config import settings
-from app.database import engine, Base, SessionLocal
+from app.database import engine, Base
 from app.routers import auth, lectures, checkpoints, playback, misconceptions, dashboard, concepts, demo, workflow
-from app.services.seed_service import seed_demo_data
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Initialize DB tables
     Base.metadata.create_all(bind=engine)
-    
-    # Auto-seed initial demo user and lecture
-    db = SessionLocal()
-    try:
-        seed_demo_data(db)
-    except Exception as e:
-        print(f"[Lifespan] Auto-seed notification: {e}")
-    finally:
-        db.close()
-        
     yield
 
 app = FastAPI(
@@ -31,12 +20,23 @@ app = FastAPI(
 )
 
 # CORS configuration for development and production
+cors_origins = [
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+    "http://localhost:8000",
+    "http://127.0.0.1:8000",
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=cors_origins,
+    allow_origin_regex=r"https?://(localhost|127\.0\.0\.1)(:\d+)?",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["*"],
 )
 
 # Include Routers

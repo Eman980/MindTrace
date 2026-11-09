@@ -21,6 +21,7 @@ from app.schemas.all_schemas import (
     MisconceptionLedgerItemOut,
     LedgerAttemptOut,
     CheckpointOut,
+    MisconceptionStatusUpdateIn,
 )
 from app.services.misconception_service import misconception_service
 from app.services.evaluation_service import evaluation_service
@@ -43,7 +44,7 @@ def _calculate_hours_since(dt: Optional[datetime]) -> float:
 @router.get("", response_model=List[MisconceptionOut])
 def list_misconceptions(
     priority: Optional[str] = Query(None),       # High, Medium, Low
-    status_filter: Optional[str] = Query(None),  # Unresolved, Improving, Resolved
+    status_filter: Optional[str] = Query(None),  # Unresolved, Needs Review, In Progress, Resolved
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
@@ -53,16 +54,30 @@ def list_misconceptions(
         query = query.filter(Misconception.severity_level == priority.capitalize())
         
     if status_filter and status_filter != "All":
-        if status_filter.lower() == "unresolved":
+        sf = status_filter.strip().lower()
+        if sf == "unresolved":
             query = query.filter(Misconception.status.in_(["New", "Unresolved"]))
+        elif sf in ["needs review", "needs_review"]:
+            query = query.filter(Misconception.status.in_(["Needs Review", "Needs_Review"]))
+        elif sf in ["in progress", "in_progress", "improving"]:
+            query = query.filter(Misconception.status.in_(["In Progress", "Improving", "in_progress"]))
+        elif sf == "resolved":
+            query = query.filter(Misconception.status == "Resolved")
         else:
-            query = query.filter(Misconception.status == status_filter.capitalize())
+            query = query.filter(Misconception.status.ilike(status_filter))
             
     misconceptions = query.order_by(desc(Misconception.severity_score), desc(Misconception.last_detected)).all()
     
     results = []
     for m in misconceptions:
         lec = db.query(Lecture).filter(Lecture.id == m.lecture_id).first()
+        concept = db.query(Concept).filter(Concept.id == m.concept_id).first()
+        
+        c_start = concept.start_time if concept else 0.0
+        c_end = concept.end_time if concept else 0.0
+        correct_exp = (concept.core_concepts[0] if (concept and concept.core_concepts) else "Master foundational definition and invariant relationships.")
+        incorrect_und = (concept.confusing_topics[0] if (concept and concept.confusing_topics) else (m.summary or "Superficial intuition ignoring core constraints."))
+
         results.append({
             "id": m.id,
             "user_id": m.user_id,
@@ -72,6 +87,10 @@ def list_misconceptions(
             "concept_name": m.concept_name,
             "title": m.title,
             "summary": m.summary,
+            "incorrect_understanding": incorrect_und,
+            "correct_explanation": correct_exp,
+            "concept_start_time": c_start,
+            "concept_end_time": c_end,
             "severity_score": m.severity_score,
             "severity_level": m.severity_level,
             "occurrence_count": m.occurrence_count,
@@ -409,7 +428,20 @@ async def resolve_misconception(
     Submits answer to the targeted review checkpoint.
     If answered accurately, updates status: High Priority -> Improving -> Resolved!
     """
-    checkpoint = db.query(Checkpoint).filter(Checkpoint.id == resolve_in.checkpoint_id).first()
+    misc = db.query(Misconception).filter(
+        Misconception.id == misconception_id,
+        Misconception.user_id == current_user.id
+    ).first()
+    if not misc:
+        raise HTTPException(status_code=404, detail="Misconception not found.")
+
+    checkpoint = (
+        db.query(Checkpoint)
+        .join(Concept)
+        .join(Lecture)
+        .filter(Checkpoint.id == resolve_in.checkpoint_id, Lecture.user_id == current_user.id)
+        .first()
+    )
     if not checkpoint:
         raise HTTPException(status_code=404, detail="Review checkpoint not found.")
         
@@ -436,3 +468,83 @@ async def resolve_misconception(
         "new_severity_score": updated_misc.severity_score if updated_misc else 0,
         "message": "Misconception updated based on review performance."
     }
+
+
+@router.patch("/{misconception_id}/status")
+@router.put("/{misconception_id}/status")
+def update_misconception_status(
+    misconception_id: int,
+    payload: MisconceptionStatusUpdateIn,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Allows the student to manually update the status of a misconception:
+    'Unresolved', 'Needs Review', 'In Progress', or 'Resolved'.
+    Persists the change and adds an audit evidence trail entry.
+    """
+    valid_statuses = ["Unresolved", "Needs Review", "In Progress", "Resolved", "Improving"]
+    target_status = payload.status.strip()
+    
+    # Case-insensitive match to canonical statuses
+    canonical_match = next((s for s in valid_statuses if s.lower() == target_status.lower()), None)
+    if not canonical_match:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid status '{target_status}'. Allowed values: Unresolved, Needs Review, In Progress, Resolved"
+        )
+    target_status = canonical_match
+
+    misc = db.query(Misconception).filter(
+        Misconception.id == misconception_id,
+        Misconception.user_id == current_user.id
+    ).first()
+    if not misc:
+        raise HTTPException(status_code=404, detail="Misconception not found.")
+
+    old_status = misc.status
+    misc.status = target_status
+    now = datetime.now(timezone.utc)
+
+    if target_status == "Resolved":
+        misc.resolved_at = now
+        misc.evidence_status = "Resolved"
+        misc.severity_score = max(0, misc.severity_score - 3)
+    elif target_status in ["Unresolved", "Needs Review"]:
+        misc.resolved_at = None
+        if misc.evidence_status == "Resolved":
+            misc.evidence_status = "Recurred"
+            misc.recurrence_count = (misc.recurrence_count or 0) + 1
+    elif target_status == "In Progress":
+        misc.resolved_at = None
+
+    # Recalculate severity level
+    if misc.severity_score <= 2:
+        misc.severity_level = "Low"
+    elif misc.severity_score <= 5:
+        misc.severity_level = "Medium"
+    else:
+        misc.severity_level = "High"
+
+    # Add audit evidence entry
+    evidence = MisconceptionEvidence(
+        misconception_id=misc.id,
+        signal_type="manual_status_update",
+        evidence_text=f"Status updated from '{old_status}' to '{target_status}'.",
+        points_added=0 if target_status == "Resolved" else 1,
+        created_at=now
+    )
+    db.add(evidence)
+    db.commit()
+    db.refresh(misc)
+
+    return {
+        "success": True,
+        "message": f"Misconception status updated to '{target_status}'.",
+        "misconception_id": misc.id,
+        "status": misc.status,
+        "severity_level": misc.severity_level,
+        "severity_score": misc.severity_score,
+        "resolved_at": misc.resolved_at
+    }
+

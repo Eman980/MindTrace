@@ -11,7 +11,6 @@ import { MisconceptionsPage } from './pages/MisconceptionsPage';
 import { LedgerPage } from './pages/LedgerPage';
 import { ReviewPage } from './pages/ReviewPage';
 import { ProgressPage } from './pages/ProgressPage';
-import { FYP2RoadmapPage } from './pages/FYP2RoadmapPage';
 import { api } from './services/api';
 
 // ─── Inner app that consumes AuthContext ──────────────────────────────────────
@@ -19,7 +18,18 @@ const AppInner: React.FC = () => {
   const { user, loading } = useAuth();
 
   // Tab-based navigation state
-  const [activeTab, setActiveTab] = useState<string>('landing');
+  const [activeTab, setActiveTab] = useState<string>(() => {
+    try {
+      const params = new URLSearchParams(window.location.search);
+      const hash = window.location.hash;
+      if (params.get('token') || params.get('reset_token') || hash.includes('reset-password')) {
+        return 'login';
+      }
+    } catch {
+      // Ignore
+    }
+    return 'landing';
+  });
 
   // For the lecture player — which lecture is open
   const [selectedLectureId, setSelectedLectureId] = useState<number | null>(null);
@@ -120,7 +130,17 @@ const AppInner: React.FC = () => {
           unresolvedCount={unresolvedCount}
         />
         <AuthPage
-          initialMode={activeTab === 'signup' ? 'signup' : 'login'}
+          initialMode={
+            (() => {
+              try {
+                const p = new URLSearchParams(window.location.search);
+                if (p.get('token') || p.get('reset_token') || window.location.hash.includes('reset-password')) {
+                  return 'reset-password';
+                }
+              } catch {}
+              return activeTab === 'signup' ? 'signup' : 'login';
+            })()
+          }
           onSuccess={() => setActiveTab('dashboard')}
           onSwitchMode={(mode) => setActiveTab(mode)}
         />
@@ -173,7 +193,7 @@ const AppInner: React.FC = () => {
         );
 
       case 'misconceptions':
-        return <MisconceptionsPage onReviewConcept={handleReviewConcept} />;
+        return <MisconceptionsPage onReviewConcept={handleReviewConcept} onGoToLecture={handleSelectLecture} />;
 
       case 'ledger':
         return (
@@ -198,8 +218,6 @@ const AppInner: React.FC = () => {
       case 'progress':
         return <ProgressPage onGoToLecture={handleSelectLecture} />;
 
-      case 'fyp2':
-        return <FYP2RoadmapPage />;
 
       default:
         return <LandingPage setActiveTab={setActiveTab} />;
