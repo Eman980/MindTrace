@@ -120,16 +120,25 @@ async def test_generation():
     assert easy_count >= 2, f"Expected at least 2 easy questions, got {easy_count}"
     assert moderate_count >= 3, f"Expected at least 3 moderate questions, got {moderate_count}"
 
-    # 3. Check ordering: All Easy questions MUST come before Moderate questions
-    difficulties = [q["difficulty"] for q in questions]
-    seen_moderate = False
-    for d in difficulties:
-        if d == "moderate":
-            seen_moderate = True
-        elif d == "easy" and seen_moderate:
-            raise AssertionError(f"Found 'easy' question AFTER 'moderate' in sequence: {difficulties}")
+    # 3. Check ordering: All MCQs MUST come first, followed by short/scenario at the end
+    seen_non_mcq = False
+    for idx, q in enumerate(questions):
+        if q["question_type"] == "mcq":
+            assert not seen_non_mcq, f"Found MCQ after short question at index {idx}"
+        else:
+            seen_non_mcq = True
 
-    print("[PASS] Difficulty ordering verified: all 'easy' questions precede 'moderate' questions.")
+    # Within each question type, easy questions precede moderate questions
+    for subset_name, subset in [("MCQ", [q for q in questions if q["question_type"] == "mcq"]),
+                                ("Short/Scenario", [q for q in questions if q["question_type"] != "mcq"])]:
+        seen_mod = False
+        for q in subset:
+            if q["difficulty"] == "moderate":
+                seen_mod = True
+            elif q["difficulty"] == "easy" and seen_mod:
+                raise AssertionError(f"Found 'easy' question after 'moderate' in {subset_name} sequence")
+
+    print("[PASS] Ordering verified: all MCQs precede short-answer questions, and easy precedes moderate within each type.")
 
     # 4. Check question schema rules
     for idx, q in enumerate(questions):

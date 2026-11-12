@@ -133,8 +133,9 @@ def seed_demo_data(db: Session, target_user: User) -> Lecture:
                 is_review_checkpoint=False,
                 item_family_role=cp.get("item_family_role", "original"),
                 target_misconception=cp.get("target_misconception", None),
-                source_excerpt=concept.transcript_text[:140] if concept.transcript_text else None,
-                source_timestamp=concept.start_time,
+                source_excerpt=cp.get("source_excerpt") or (concept.transcript_text[:140] if concept.transcript_text else None),
+                source_timestamp=cp.get("source_timestamp", concept.start_time),
+                source_end_timestamp=cp.get("source_end_timestamp", concept.end_time),
                 created_at=utcnow()
             )
             db.add(chk)
