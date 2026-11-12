@@ -73,6 +73,19 @@ def ensure_schema_compatibility():
                 conn.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS uq_lectures_user_file_hash ON lectures(user_id, file_hash)"))
                 conn.commit()
 
+            # Misconceptions lifecycle columns
+            res_misc = conn.execute(text("PRAGMA table_info(misconceptions)"))
+            misc_cols = {row[1] for row in res_misc.fetchall()}
+            if misc_cols and "improving_at" not in misc_cols:
+                conn.execute(text("ALTER TABLE misconceptions ADD COLUMN improving_at DATE DEFAULT NULL"))
+                conn.commit()
+            if misc_cols and "recheck_due" not in misc_cols:
+                conn.execute(text("ALTER TABLE misconceptions ADD COLUMN recheck_due DATE DEFAULT NULL"))
+                conn.commit()
+            if misc_cols and "relapse_count" not in misc_cols:
+                conn.execute(text("ALTER TABLE misconceptions ADD COLUMN relapse_count INTEGER DEFAULT 0"))
+                conn.commit()
+
             # Media files columns
             res_mf = conn.execute(text("PRAGMA table_info(media_files)"))
             mf_cols = {row[1] for row in res_mf.fetchall()}

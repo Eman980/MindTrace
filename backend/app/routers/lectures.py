@@ -29,6 +29,7 @@ from app.services.checkpoint_service import checkpoint_service
 from app.services.cross_topic_recheck_service import cross_topic_recheck_service
 from app.services.audio_gen import generate_sample_audio_if_needed
 from app.services.audio_processing_service import audio_processing_service
+from app.services.prerequisite_link_service import auto_detect_prerequisite_links
 from app.config import settings
 
 router = APIRouter(prefix="/lectures", tags=["Lectures"])
@@ -50,7 +51,7 @@ def list_lectures(db: Session = Depends(get_db), current_user: User = Depends(ge
         unresolved_count = db.query(Misconception).filter(
             Misconception.lecture_id == lec.id,
             Misconception.user_id == current_user.id,
-            Misconception.status == "Unresolved"
+            Misconception.status.in_(["Unresolved", "Needs Review", "New"])
         ).count()
         
         # Calculate average progress
@@ -236,19 +237,63 @@ async def generate_concepts_for_lecture_internal(
             item_family_role=q_item.get("item_family_role", "original"),
             target_misconception=q_item.get("target_misconception", None),
             source_excerpt=q_item.get("source_excerpt", None),
-            source_timestamp=q_item.get("source_timestamp", None)
+            source_timestamp=q_item.get("source_timestamp", None),
+            source_end_timestamp=q_item.get("source_end_timestamp", None)
         )
         db.add(chk)
     db.commit()
 
+    saved_checkpoints = (
+        db.query(Checkpoint)
+        .join(Concept)
+        .filter(Concept.lecture_id == lecture.id)
+        .order_by(Checkpoint.order_index.asc())
+        .all()
+    )
+
+    checkpoints_out = [
+        {
+            "id": chk.id,
+            "concept_id": chk.concept_id,
+            "lecture_id": lecture.id,
+            "lecture_title": lecture.title,
+            "question_type": chk.question_type,
+            "difficulty": chk.difficulty or "easy",
+            "question_text": chk.question_text,
+            "options": chk.options or [],
+            "correct_answer": chk.correct_answer,
+            "explanation": chk.explanation,
+            "order_index": chk.order_index,
+            "scenario_text": chk.scenario_text,
+            "source_excerpt": chk.source_excerpt,
+            "source_timestamp": chk.source_timestamp,
+            "source_start_timestamp": chk.source_timestamp,
+            "source_end_timestamp": getattr(chk, "source_end_timestamp", None),
+        }
+        for chk in saved_checkpoints
+    ]
+
     for c in saved_concepts:
         db.refresh(c)
+        c_checkpoints = [chk for chk in saved_checkpoints if chk.concept_id == c.id]
         concepts_out.append({
             "id": c.id,
             "title": c.title,
             "start_time": c.start_time,
             "end_time": c.end_time,
-            "checkpoints_count": len(c.checkpoints)
+            "checkpoints_count": len(c_checkpoints),
+            "checkpoints": [
+                {
+                    "id": chk.id,
+                    "concept_id": chk.concept_id,
+                    "question_type": chk.question_type,
+                    "difficulty": chk.difficulty or "easy",
+                    "question_text": chk.question_text,
+                    "options": chk.options or [],
+                    "order_index": chk.order_index,
+                }
+                for chk in c_checkpoints
+            ]
         })
 
     lecture.status = "ready"
@@ -263,7 +308,8 @@ async def generate_concepts_for_lecture_internal(
         "status": "ready",
         "concepts_count": len(concepts_out),
         "checkpoints_count": total_chks,
-        "concepts": concepts_out
+        "concepts": concepts_out,
+        "checkpoints": checkpoints_out
     }
 
 
@@ -275,7 +321,6 @@ async def upload_lecture(
     transcript_text: Optional[str] = Form(None),
     transcript_file: Optional[UploadFile] = File(None),
     audio_language: Optional[str] = Form("en"),
-    prerequisite_lecture_id: Optional[int] = Form(None),
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
@@ -334,16 +379,6 @@ async def upload_lecture(
 
     file_hash = hasher.hexdigest()
 
-    # Validate prerequisite lecture if provided
-    validated_prereq_id = None
-    if prerequisite_lecture_id:
-        validated_prereq_id = validate_prerequisite_lecture(
-            db=db,
-            lecture_id=None,
-            prerequisite_id=prerequisite_lecture_id,
-            user_id=current_user.id
-        )
-
     # Check for existing duplicate lecture by content SHA-256 hash for the current user
     # If an existing lecture succeeded (status != "failed"), return it as a duplicate.
     # If a previous attempt failed, clean up the failed record to allow a fresh retry.
@@ -353,9 +388,6 @@ async def upload_lecture(
         Lecture.status != "failed"
     ).first()
     if existing_lecture:
-        if validated_prereq_id and not existing_lecture.prerequisite_lecture_id:
-            existing_lecture.prerequisite_lecture_id = validated_prereq_id
-            db.commit()
         # File is a duplicate! Remove redundant uploaded file to conserve disk space.
         if os.path.exists(saved_file_path):
             try:
@@ -407,7 +439,7 @@ async def upload_lecture(
         status="processing",
         is_demo=False,
         file_hash=file_hash,
-        prerequisite_lecture_id=validated_prereq_id
+        prerequisite_lecture_id=None  # Set automatically by auto_detect_prerequisite_links
     )
     db.add(lecture)
     try:
@@ -470,6 +502,14 @@ async def upload_lecture(
             db.commit()
 
         await generate_concepts_for_lecture_internal(lecture, current_user.id, db)
+
+        # Auto-detect concept-level prerequisite links (fires-and-forgets on failure)
+        try:
+            db.refresh(lecture)
+            await auto_detect_prerequisite_links(current_user.id, lecture, db)
+        except Exception as _prereq_err:
+            print(f"[PrereqLinks] Non-fatal error during auto-link: {_prereq_err}")
+
     except Exception as e:
         db.rollback()
         lecture.status = "failed"
@@ -550,6 +590,14 @@ async def generate_lecture_endpoint(
 
     try:
         gen_result = await generate_concepts_for_lecture_internal(lecture, current_user.id, db)
+
+        # Auto-detect prerequisite links after regeneration
+        try:
+            db.refresh(lecture)
+            await auto_detect_prerequisite_links(current_user.id, lecture, db)
+        except Exception as _prereq_err:
+            print(f"[PrereqLinks] Non-fatal error during auto-link: {_prereq_err}")
+
         return gen_result
     except Exception as e:
         lecture.status = "failed"
@@ -599,7 +647,7 @@ def get_lecture_segments_endpoint(
 
 
 @router.post("/flag/{concept_id}")
-def flag_concept_endpoint(
+async def flag_concept_endpoint(
     concept_id: int,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
@@ -622,7 +670,28 @@ def flag_concept_endpoint(
         timestamp_in_media=concept.start_time,
         reason="Explicitly flagged by student for revision"
     )
-    return {"success": True, "message": "Concept flagged for review", "misconception_id": res.id if res else None}
+
+    mongo_id = None
+    try:
+        from app.mongo import create_or_get_misconception, mark_misconception_open
+        m_doc = await create_or_get_misconception(
+            student_id=current_user.id,
+            lecture_id=concept.lecture_id,
+            concept=concept.title,
+            original_question=f"Flagged by student: {concept.title}"
+        )
+        if m_doc:
+            await mark_misconception_open(m_doc["id"])
+            mongo_id = m_doc.get("id")
+    except Exception as e:
+        print(f"[MongoDB] Flag sync warning: {e}")
+
+    return {
+        "success": True,
+        "message": "Concept flagged for review",
+        "misconception_id": mongo_id or (res.id if res else None),
+        "status": "open"
+    }
 
 
 @router.post("/replay/{concept_id}")
@@ -654,7 +723,7 @@ def replay_concept_endpoint(
 
 
 @router.get("/report/{recording_id}")
-def get_recording_report_endpoint(
+async def get_recording_report_endpoint(
     recording_id: int,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
@@ -686,6 +755,51 @@ def get_recording_report_endpoint(
         .all()
     )
 
+    # Status counts & Relapse list
+    open_count = 0
+    improving_count = 0
+    resolved_count = 0
+    relapse_list = []
+
+    for m in misconceptions:
+        st = (m.status or "open").lower()
+        if st == "improving":
+            improving_count += 1
+        elif st in ["resolved", "mastered"]:
+            resolved_count += 1
+        else:
+            open_count += 1
+
+        relapse_cnt = getattr(m, "relapse_count", 0) or 0
+        if relapse_cnt > 0:
+            relapse_list.append({
+                "misconception_id": str(m.id),
+                "concept": m.concept_name or m.title,
+                "status": m.status,
+                "relapse_count": relapse_cnt,
+                "label": "memorized, not understood",
+                "explanation": m.summary or "First correct answer was memorized, not understood."
+            })
+
+    # Merge with MongoDB Atlas report data if available
+    try:
+        from app.mongo import get_misconceptions_report_data
+        mongo_rep = await get_misconceptions_report_data(lecture_id=lecture.id, student_id=current_user.id)
+        if mongo_rep:
+            sc = mongo_rep.get("status_counts", {})
+            if sc.get("open", 0) > 0 or sc.get("improving", 0) > 0 or sc.get("resolved", 0) > 0:
+                open_count = max(open_count, sc.get("open", 0))
+                improving_count = max(improving_count, sc.get("improving", 0))
+                resolved_count = max(resolved_count, sc.get("resolved", 0))
+
+            seen_ids = {r["misconception_id"] for r in relapse_list}
+            for mr in mongo_rep.get("relapses", []):
+                if mr["misconception_id"] not in seen_ids:
+                    relapse_list.append(mr)
+                    seen_ids.add(mr["misconception_id"])
+    except Exception as e:
+        print(f"[Report] MongoDB report merge warning: {e}")
+
     return {
         "recording_id": lecture.id,
         "title": lecture.title,
@@ -696,13 +810,21 @@ def get_recording_report_endpoint(
         "correct_attempts": correct_attempts,
         "accuracy_percentage": accuracy,
         "misconceptions_count": len(misconceptions),
+        "status_counts": {
+            "open": open_count,
+            "improving": improving_count,
+            "resolved": resolved_count
+        },
+        "relapse_list": relapse_list,
+        "relapses": relapse_list,
         "misconceptions": [
             {
                 "id": m.id,
                 "concept_id": m.concept_id,
-                "label": m.label,
+                "label": getattr(m, "label", m.concept_name or m.title),
                 "status": m.status,
-                "severity_level": m.severity_level
+                "severity_level": m.severity_level,
+                "relapse_count": getattr(m, "relapse_count", 0) or 0
             }
             for m in misconceptions
         ]
@@ -725,13 +847,14 @@ def get_lecture(lecture_id: int, db: Session = Depends(get_db), current_user: Us
         ).first()
         
         # Checkpoints - expose all diagnostic questions with student attempt history
-        # Sorted Easy first (0), then Moderate (1); within difficulty by timestamp / order_index
+        # All MCQs first (0), then short-answer questions at the end (1); within type, Easy first, then Moderate
         sorted_checkpoints = sorted(
             c.checkpoints,
             key=lambda q: (
+                0 if (getattr(q, "question_type", "mcq") or "mcq").lower() == "mcq" else 1,
                 0 if (getattr(q, "difficulty", "easy") or "easy").lower() == "easy" else 1,
-                q.source_timestamp or 0.0,
-                q.order_index or 0
+                q.order_index or 0,
+                q.source_timestamp or 0.0
             )
         )
         checkpoints_out = []
@@ -779,6 +902,10 @@ def get_lecture(lecture_id: int, db: Session = Depends(get_db), current_user: Us
                 "target_misconception": chk.target_misconception,
                 "source_excerpt": chk.source_excerpt,
                 "source_timestamp": chk.source_timestamp,
+                "source_start_timestamp": chk.source_timestamp,
+                "source_end_timestamp": getattr(chk, "source_end_timestamp", None),
+                "lecture_id": lecture.id,
+                "lecture_title": lecture.title,
                 "attempts": attempts_data,
                 "latest_attempt": latest_att
             })
@@ -806,7 +933,7 @@ def get_lecture(lecture_id: int, db: Session = Depends(get_db), current_user: Us
     unresolved_count = db.query(Misconception).filter(
         Misconception.lecture_id == lecture.id,
         Misconception.user_id == current_user.id,
-        Misconception.status == "Unresolved"
+        Misconception.status.in_(["Unresolved", "Needs Review", "New"])
     ).count()
 
     # Progress

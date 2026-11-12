@@ -1,14 +1,21 @@
 import os
+from dotenv import load_dotenv
 from pydantic_settings import BaseSettings
+
+_env_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".env")
+if os.path.exists(_env_path):
+    load_dotenv(_env_path)
 
 class Settings(BaseSettings):
     PROJECT_NAME: str = "MindTrace"
     PROJECT_TAGLINE: str = "Understand What You Understand"
     API_V1_PREFIX: str = "/api/v1"
 
-    # Database
+    # Database (SQLite & MongoDB Atlas)
     DEFAULT_DB_PATH: str = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "mindtrace.db")
     DATABASE_URL: str = os.getenv("DATABASE_URL", f"sqlite:///{DEFAULT_DB_PATH}")
+    MONGODB_URL: str = os.getenv("MONGODB_URL", "")
+    MONGODB_DB_NAME: str = os.getenv("MONGODB_DB_NAME", "mindtrace")
 
     # Security & Auth
     SECRET_KEY: str = os.getenv("SECRET_KEY", "mindtrace_fyp_university_secret_key_change_in_prod_2026")

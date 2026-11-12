@@ -1,6 +1,13 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { api } from '../services/api';
-import type { Lecture, Concept, Checkpoint, CheckpointEvaluation } from '../types';
+import type {
+  Lecture,
+  Concept,
+  Checkpoint,
+  CheckpointEvaluation,
+  PrerequisiteRecheck,
+  PrerequisiteRecheckSubmitResult,
+} from '../types';
 import {
   Play,
   Pause,
@@ -28,6 +35,7 @@ import {
   Edit3,
   X
 } from 'lucide-react';
+import { McqSourceSection } from '../components/McqSourceSection';
 
 interface PlayerPageProps {
   lectureId: number;
@@ -86,6 +94,86 @@ export const PlayerPage: React.FC<PlayerPageProps> = ({
   const [reviewIndex, setReviewIndex] = useState<number>(0);
   const checkpointCardRef = useRef<HTMLDivElement | null>(null);
 
+  // Cross-Topic Prerequisite Re-Check State
+  const [rechecks, setRechecks] = useState<PrerequisiteRecheck[]>([]);
+  const [activeRecheckIndex, setActiveRecheckIndex] = useState<number>(0);
+  const [recheckSkipped, setRecheckSkipped] = useState<boolean>(false);
+  const [recheckAnswers, setRecheckAnswers] = useState<Record<number, {
+    selectedAnswer: string;
+    submitted: boolean;
+    isCorrect?: boolean;
+    result?: PrerequisiteRecheckSubmitResult;
+    submitting?: boolean;
+  }>>({});
+
+  const loadRechecks = async (id: number) => {
+    try {
+      const data = await api.lectures.getRechecks(id);
+      setRechecks(Array.isArray(data) ? data : []);
+      setActiveRecheckIndex(0);
+      setRecheckSkipped(false);
+      setRecheckAnswers({});
+    } catch {
+      setRechecks([]);
+    }
+  };
+
+  const handleSelectRecheckOption = (miscId: number, opt: string) => {
+    if (recheckAnswers[miscId]?.submitted) return;
+    setRecheckAnswers((prev) => ({
+      ...prev,
+      [miscId]: {
+        ...prev[miscId],
+        selectedAnswer: opt,
+        submitted: false,
+      },
+    }));
+  };
+
+  const handleSubmitRecheck = async (item: PrerequisiteRecheck) => {
+    const current = recheckAnswers[item.misconception_id];
+    if (!current?.selectedAnswer || current.submitted || current.submitting || !lecture) return;
+
+    setRecheckAnswers((prev) => ({
+      ...prev,
+      [item.misconception_id]: {
+        ...prev[item.misconception_id],
+        submitting: true,
+      },
+    }));
+
+    try {
+      const res = await api.lectures.submitRecheck(lecture.id, {
+        misconception_id: item.misconception_id,
+        checkpoint_id: item.question.id,
+        student_answer: current.selectedAnswer,
+      });
+
+      setRecheckAnswers((prev) => ({
+        ...prev,
+        [item.misconception_id]: {
+          selectedAnswer: current.selectedAnswer,
+          submitted: true,
+          submitting: false,
+          isCorrect: res.is_correct,
+          result: res,
+        },
+      }));
+    } catch (err: any) {
+      setRecheckAnswers((prev) => ({
+        ...prev,
+        [item.misconception_id]: {
+          ...prev[item.misconception_id],
+          submitting: false,
+        },
+      }));
+    }
+  };
+
+  const handleSkipRecheck = () => {
+    setRecheckSkipped(true);
+  };
+
   // Rename modal state
   const [showRenameModal, setShowRenameModal] = useState<boolean>(false);
   const [newTitle, setNewTitle] = useState<string>('');
@@ -114,6 +202,53 @@ export const PlayerPage: React.FC<PlayerPageProps> = ({
     }
   };
 
+  // Prerequisite edit control state
+  const [isEditingPrereq, setIsEditingPrereq] = useState<boolean>(false);
+  const [selectedPrereqId, setSelectedPrereqId] = useState<string>('');
+  const [availablePrereqs, setAvailablePrereqs] = useState<Lecture[]>([]);
+  const [savingPrereq, setSavingPrereq] = useState<boolean>(false);
+
+  const handleStartEditPrereq = async () => {
+    if (!lecture) return;
+    setSelectedPrereqId(
+      lecture.prerequisite_lecture_id ? String(lecture.prerequisite_lecture_id) : ''
+    );
+    setIsEditingPrereq(true);
+    try {
+      const allLecs = await api.lectures.list();
+      // Exclude current lecture to prevent self-prerequisite selection
+      const filtered = Array.isArray(allLecs)
+        ? allLecs.filter((l) => l.id !== lecture.id)
+        : [];
+      setAvailablePrereqs(filtered);
+    } catch (e) {
+      console.error('Failed to load lecture list for prerequisite selection', e);
+    }
+  };
+
+  const handleSavePrereq = async () => {
+    if (!lecture) return;
+    setSavingPrereq(true);
+    try {
+      const prereqId = selectedPrereqId ? parseInt(selectedPrereqId, 10) : null;
+      const res = await api.lectures.update(lecture.id, {
+        prerequisite_lecture_id: prereqId,
+      });
+      setLecture({
+        ...lecture,
+        prerequisite_lecture_id: res.prerequisite_lecture_id,
+        prerequisite_lecture_title: res.prerequisite_lecture_title,
+      });
+      setIsEditingPrereq(false);
+      // Reload re-checks immediately for this new prerequisite
+      await loadRechecks(lecture.id);
+    } catch (err: any) {
+      alert(`Could not update prerequisite: ${err.message || 'Validation error'}`);
+    } finally {
+      setSavingPrereq(false);
+    }
+  };
+
   const mediaRef = useRef<HTMLVideoElement | HTMLAudioElement | null>(null);
 
   const loadLecture = async () => {
@@ -125,6 +260,7 @@ export const PlayerPage: React.FC<PlayerPageProps> = ({
         setDuration(data.duration_seconds);
       }
       initializeQuestionsFromLecture(data);
+      await loadRechecks(lectureId);
     } catch (err: any) {
       setError(err.message || 'Failed to load lecture details.');
     } finally {
@@ -141,8 +277,22 @@ export const PlayerPage: React.FC<PlayerPageProps> = ({
     }
   };
 
+  const sortQuestions = (items: QuestionItem[]): QuestionItem[] => {
+    return [...items].sort((a, b) => {
+      const typeRankA = (a.question_type || 'mcq') === 'mcq' ? 0 : 1;
+      const typeRankB = (b.question_type || 'mcq') === 'mcq' ? 0 : 1;
+      if (typeRankA !== typeRankB) return typeRankA - typeRankB;
+
+      const diffRankA = (a.difficulty || 'easy').toLowerCase() === 'easy' ? 0 : 1;
+      const diffRankB = (b.difficulty || 'easy').toLowerCase() === 'easy' ? 0 : 1;
+      if (diffRankA !== diffRankB) return diffRankA - diffRankB;
+
+      return (a.order_index ?? 0) - (b.order_index ?? 0);
+    });
+  };
+
   const initializeQuestionsFromLecture = (data: Lecture) => {
-    const questions: QuestionItem[] = (data.concepts || []).flatMap((c) =>
+    const rawQuestions: QuestionItem[] = (data.concepts || []).flatMap((c) =>
       (c.checkpoints || []).map((chk) => ({
         ...chk,
         conceptTitle: c.title,
@@ -150,12 +300,14 @@ export const PlayerPage: React.FC<PlayerPageProps> = ({
         conceptEndTime: c.end_time,
       }))
     );
+    const questions = sortQuestions(rawQuestions);
 
     setQuestionResults((prev) => {
       const updated = { ...prev };
       questions.forEach((q) => {
         // Only mark submitted if question has an existing attempt in DB and no local answer yet
         if (q.latest_attempt && !updated[q.id]) {
+          const attVerdict = q.latest_attempt.grade || q.latest_attempt.verdict || (q.latest_attempt.explanation_verdict as any) || (q.latest_attempt.is_correct ? 'correct' : 'incorrect');
           updated[q.id] = {
             selectedAnswer: q.latest_attempt.student_answer,
             isCorrect: q.latest_attempt.is_correct,
@@ -164,6 +316,9 @@ export const PlayerPage: React.FC<PlayerPageProps> = ({
               checkpoint_id: q.id,
               student_answer: q.latest_attempt.student_answer,
               is_correct: q.latest_attempt.is_correct,
+              verdict: attVerdict,
+              grade: attVerdict,
+              feedback: q.latest_attempt.feedback || q.latest_attempt.feedback_reason,
               confidence: q.latest_attempt.confidence_score ?? 1.0,
               feedback_reason:
                 q.latest_attempt.feedback_reason ||
@@ -218,15 +373,18 @@ export const PlayerPage: React.FC<PlayerPageProps> = ({
   const concepts = lecture?.concepts || [];
   const activeConcept = concepts[activeConceptIndex] || null;
 
-  // Gather flattened question set across the lecture
-  const allQuestions: QuestionItem[] = concepts.flatMap((c) =>
-    (c.checkpoints || []).map((chk) => ({
-      ...chk,
-      conceptTitle: c.title,
-      conceptStartTime: c.start_time,
-      conceptEndTime: c.end_time,
-    }))
-  );
+  // Gather flattened question set across the lecture: all MCQs first, short-answer questions at the end
+  const allQuestions: QuestionItem[] = useMemo(() => {
+    const raw = concepts.flatMap((c) =>
+      (c.checkpoints || []).map((chk) => ({
+        ...chk,
+        conceptTitle: c.title,
+        conceptStartTime: c.start_time,
+        conceptEndTime: c.end_time,
+      }))
+    );
+    return sortQuestions(raw);
+  }, [concepts]);
 
   const currentQ: QuestionItem | undefined = allQuestions[activeQIndex];
   const currentResult: QuestionResult | undefined = currentQ ? questionResults[currentQ.id] : undefined;
@@ -322,6 +480,19 @@ export const PlayerPage: React.FC<PlayerPageProps> = ({
       `Replaying lecture section for '${currentQ?.conceptTitle || 'concept'}' at ${formatTime(targetTime)}.`
     );
     window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
+  const handleWatchSourcePart = (timestamp: number) => {
+    handleSeek(timestamp);
+    if (mediaRef.current) {
+      mediaRef.current.currentTime = timestamp;
+      mediaRef.current.play().catch(() => {});
+      setIsPlaying(true);
+    }
+    const playerCard = document.getElementById('media-player-card');
+    if (playerCard) {
+      playerCard.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }
   };
 
   const handleMarkUnresolved = async () => {
@@ -587,7 +758,7 @@ export const PlayerPage: React.FC<PlayerPageProps> = ({
             <ArrowLeft size={14} />
             <span>Back to Lectures</span>
           </button>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
             <span style={{ fontSize: '16px', fontWeight: 800, color: 'var(--primary-navy)' }}>
               {lecture.title}
             </span>
@@ -600,6 +771,93 @@ export const PlayerPage: React.FC<PlayerPageProps> = ({
               <Edit3 size={12} color="var(--accent-purple)" />
               <span>Rename</span>
             </button>
+
+            {/* Prerequisite Lecture Control */}
+            <div
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '6px',
+                fontSize: '12px',
+                paddingLeft: '8px',
+                borderLeft: '1px solid var(--border-subtle)',
+              }}
+            >
+              <span style={{ color: 'var(--text-muted)', fontWeight: 600 }}>Prerequisite:</span>
+              {!isEditingPrereq ? (
+                <div style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+                  <span
+                    style={{
+                      fontWeight: 700,
+                      color: lecture.prerequisite_lecture_title ? 'var(--primary-navy)' : 'var(--text-muted)',
+                      background: 'var(--bg-subtle)',
+                      padding: '2px 8px',
+                      borderRadius: 'var(--radius-sm)',
+                      border: '1px solid var(--border-subtle)',
+                      maxWidth: '180px',
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                      whiteSpace: 'nowrap',
+                    }}
+                    title={lecture.prerequisite_lecture_title || 'None'}
+                  >
+                    {lecture.prerequisite_lecture_title || 'None'}
+                  </span>
+                  <button
+                    type="button"
+                    className="btn btn-secondary btn-sm"
+                    style={{ padding: '2px 8px', fontSize: '11px', height: '22px' }}
+                    onClick={handleStartEditPrereq}
+                    title="Change prerequisite lecture"
+                  >
+                    <span>Change</span>
+                  </button>
+                </div>
+              ) : (
+                <div style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+                  <select
+                    id="select-change-prerequisite"
+                    value={selectedPrereqId}
+                    disabled={savingPrereq}
+                    onChange={(e) => setSelectedPrereqId(e.target.value)}
+                    style={{
+                      fontSize: '12px',
+                      padding: '2px 6px',
+                      borderRadius: 'var(--radius-sm)',
+                      border: '1px solid var(--accent-purple)',
+                      background: '#FFFFFF',
+                      color: 'var(--primary-navy)',
+                      maxWidth: '180px',
+                    }}
+                  >
+                    <option value="">None</option>
+                    {availablePrereqs.map((l) => (
+                      <option key={l.id} value={l.id}>
+                        {l.title} {l.course_code ? `(${l.course_code})` : ''}
+                      </option>
+                    ))}
+                  </select>
+                  <button
+                    type="button"
+                    className="btn btn-primary btn-sm"
+                    style={{ padding: '2px 8px', fontSize: '11px', height: '22px' }}
+                    disabled={savingPrereq}
+                    onClick={handleSavePrereq}
+                  >
+                    <span>{savingPrereq ? 'Saving...' : 'Save'}</span>
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-secondary btn-sm"
+                    style={{ padding: '2px 6px', fontSize: '11px', height: '22px' }}
+                    disabled={savingPrereq}
+                    onClick={() => setIsEditingPrereq(false)}
+                  >
+                    <span>Cancel</span>
+                  </button>
+                </div>
+              )}
+            </div>
           </div>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
@@ -644,7 +902,7 @@ export const PlayerPage: React.FC<PlayerPageProps> = ({
         {/* LEFT AREA: Video/Audio Player, Concept Notes & Summary Cards, Timeline */}
         <div>
           {/* Media Player Card */}
-          <div className="card" style={{ padding: '0', overflow: 'hidden', marginBottom: '20px' }}>
+          <div id="media-player-card" className="card" style={{ padding: '0', overflow: 'hidden', marginBottom: '20px' }}>
             <div style={{ position: 'relative', background: '#000000', minHeight: '280px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
               {lecture.media_type === 'video' ? (
                 <video
@@ -1120,12 +1378,25 @@ export const PlayerPage: React.FC<PlayerPageProps> = ({
                           </div>
                         )}
 
-                        {/* Source Lecture Excerpt (if present) */}
-                        {(currentReviewQ.source_excerpt || qReviewEval?.source_excerpt) && (
-                          <div style={{ fontSize: '11px', background: '#FFFFFF', padding: '8px 10px', borderRadius: '6px', border: '1px dashed #CBD5E1', color: '#475569', marginBottom: '12px' }}>
-                            <strong>Source Lecture Excerpt: </strong>
-                            <em>"{currentReviewQ.source_excerpt || qReviewEval?.source_excerpt}"</em>
+                        {/* Source from Lecture */}
+                        {currentReviewQ.question_type === 'mcq' ? (
+                          <div style={{ marginBottom: '12px' }}>
+                            <McqSourceSection
+                              lectureTitle={lecture?.title || currentReviewQ.lecture_title}
+                              sourceExcerpt={currentReviewQ.source_excerpt || qReviewEval?.source_excerpt}
+                              sourceTimestamp={currentReviewQ.source_timestamp ?? qReviewEval?.source_timestamp}
+                              sourceEndTimestamp={currentReviewQ.source_end_timestamp ?? qReviewEval?.source_end_timestamp}
+                              lectureDuration={duration || lecture?.duration_seconds}
+                              onWatchThisPart={handleWatchSourcePart}
+                            />
                           </div>
+                        ) : (
+                          (currentReviewQ.source_excerpt || qReviewEval?.source_excerpt) && (
+                            <div style={{ fontSize: '11px', background: '#FFFFFF', padding: '8px 10px', borderRadius: '6px', border: '1px dashed #CBD5E1', color: '#475569', marginBottom: '12px' }}>
+                              <strong>Source Lecture Excerpt: </strong>
+                              <em>"{currentReviewQ.source_excerpt || qReviewEval?.source_excerpt}"</em>
+                            </div>
+                          )
                         )}
 
                         {/* Previous / Close / Next Navigation */}
@@ -1376,6 +1647,265 @@ export const PlayerPage: React.FC<PlayerPageProps> = ({
                 </div>
               </div>
             )
+          ) : !recheckSkipped && rechecks.length > 0 && activeRecheckIndex < rechecks.length ? (
+            /* ==============================================================
+               Prerequisite Cross-Topic Re-Check Card
+               ============================================================== */
+            (() => {
+              const currentRecheck = rechecks[activeRecheckIndex];
+              const qState = recheckAnswers[currentRecheck.misconception_id] || {
+                selectedAnswer: '',
+                submitted: false,
+                submitting: false,
+              };
+              const isSubmitted = Boolean(qState.submitted);
+              const isCorrect = Boolean(qState.isCorrect);
+
+              return (
+                <div
+                  className="card"
+                  style={{
+                    border: '2px solid var(--accent-purple)',
+                    background: '#FFFFFF',
+                    boxShadow: 'var(--shadow-md)',
+                  }}
+                >
+                  {/* Card Header */}
+                  <div
+                    style={{
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      alignItems: 'center',
+                      marginBottom: '14px',
+                      flexWrap: 'wrap',
+                      gap: '8px',
+                    }}
+                  >
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      <span
+                        style={{
+                          fontSize: '11px',
+                          fontWeight: 800,
+                          textTransform: 'uppercase',
+                          background: 'var(--accent-purple)',
+                          color: '#FFFFFF',
+                          padding: '3px 10px',
+                          borderRadius: 'var(--radius-full)',
+                          letterSpacing: '0.5px',
+                        }}
+                      >
+                        Prerequisite Re-Check
+                      </span>
+                      {rechecks.length > 1 && (
+                        <span
+                          style={{
+                            fontSize: '11px',
+                            fontWeight: 700,
+                            color: 'var(--text-muted)',
+                            background: 'var(--bg-subtle)',
+                            padding: '3px 8px',
+                            borderRadius: 'var(--radius-full)',
+                          }}
+                        >
+                          Check {activeRecheckIndex + 1} of {rechecks.length}
+                        </span>
+                      )}
+                    </div>
+
+                    <button
+                      type="button"
+                      className="btn btn-secondary btn-sm"
+                      style={{ fontSize: '12px', padding: '3px 10px' }}
+                      onClick={handleSkipRecheck}
+                      title="Skip re-checking and continue to lecture checkpoints"
+                    >
+                      <span>Skip for now</span>
+                      <ChevronRight size={13} />
+                    </button>
+                  </div>
+
+                  {/* Context Banner */}
+                  <div
+                    style={{
+                      padding: '10px 14px',
+                      background: 'var(--accent-soft)',
+                      borderRadius: 'var(--radius-md)',
+                      marginBottom: '16px',
+                      fontSize: '13px',
+                      color: 'var(--primary-navy)',
+                      lineHeight: 1.45,
+                    }}
+                  >
+                    Before this lecture, let's re-check:{' '}
+                    <strong>{currentRecheck.earlier_concept_name}</strong>{' '}
+                    (from <em>{currentRecheck.earlier_lecture_title}</em>)
+                  </div>
+
+                  {/* Question Prompt */}
+                  <div
+                    style={{
+                      fontSize: '14px',
+                      fontWeight: 700,
+                      color: 'var(--primary-navy)',
+                      marginBottom: '14px',
+                      lineHeight: 1.45,
+                    }}
+                  >
+                    {currentRecheck.question.question_text}
+                  </div>
+
+                  {/* MCQ Options */}
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', marginBottom: '16px' }}>
+                    {currentRecheck.question.options.map((opt, optIdx) => {
+                      const isSelected = qState.selectedAnswer === opt;
+                      return (
+                        <label
+                          key={optIdx}
+                          style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '10px',
+                            padding: '10px 14px',
+                            borderRadius: 'var(--radius-md)',
+                            background: isSelected ? 'var(--accent-soft)' : 'var(--bg-subtle)',
+                            border: `1px solid ${isSelected ? 'var(--accent-purple)' : 'var(--border-subtle)'}`,
+                            fontSize: '13px',
+                            cursor: isSubmitted ? 'default' : 'pointer',
+                            opacity: isSubmitted && !isSelected ? 0.75 : 1,
+                            transition: 'all 0.15s ease',
+                          }}
+                        >
+                          <input
+                            type="radio"
+                            name={`recheck-${currentRecheck.misconception_id}-option`}
+                            value={opt}
+                            checked={isSelected}
+                            disabled={isSubmitted}
+                            onChange={() => handleSelectRecheckOption(currentRecheck.misconception_id, opt)}
+                            style={{ accentColor: 'var(--accent-purple)' }}
+                          />
+                          <span style={{ fontWeight: isSelected ? 700 : 400 }}>{opt}</span>
+                        </label>
+                      );
+                    })}
+                  </div>
+
+                  {/* Submit Button (Shown only before submitting) */}
+                  {!isSubmitted && (
+                    <div style={{ marginBottom: '14px' }}>
+                      <button
+                        type="button"
+                        className="btn btn-primary btn-sm"
+                        style={{ width: '100%', height: '36px', fontSize: '13px' }}
+                        disabled={!qState.selectedAnswer || qState.submitting}
+                        onClick={() => handleSubmitRecheck(currentRecheck)}
+                      >
+                        <Send size={14} />
+                        <span>{qState.submitting ? 'Submitting...' : 'Submit Re-Check'}</span>
+                      </button>
+                    </div>
+                  )}
+
+                  {/* Feedback Banner (Shown after submit) */}
+                  {isSubmitted && (
+                    <div
+                      style={{
+                        padding: '14px 16px',
+                        borderRadius: 'var(--radius-md)',
+                        marginBottom: '16px',
+                        background: isCorrect ? '#F0FDF4' : '#FFF1F2',
+                        border: `1px solid ${isCorrect ? '#BBF7D0' : '#FECDD3'}`,
+                      }}
+                    >
+                      <div
+                        style={{
+                          display: 'flex',
+                          justifyContent: 'space-between',
+                          alignItems: 'center',
+                          marginBottom: '8px',
+                          flexWrap: 'wrap',
+                          gap: '6px',
+                        }}
+                      >
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                          {isCorrect ? (
+                            <CheckCircle2 size={18} color="#16A34A" />
+                          ) : (
+                            <AlertCircle size={18} color="#E11D48" />
+                          )}
+                          <span
+                            style={{
+                              fontSize: '14px',
+                              fontWeight: 800,
+                              color: isCorrect ? '#16A34A' : '#E11D48',
+                            }}
+                          >
+                            {isCorrect
+                              ? 'Correct! Prerequisite Gap Resolved'
+                              : 'Incorrect — Prerequisite Gap Unresolved'}
+                          </span>
+                        </div>
+
+                        <span
+                          style={{
+                            fontSize: '11px',
+                            fontWeight: 700,
+                            background: isCorrect ? '#DCFCE7' : '#FFE4E6',
+                            color: isCorrect ? '#15803D' : '#BE123C',
+                            padding: '2px 8px',
+                            borderRadius: '4px',
+                          }}
+                        >
+                          {isCorrect
+                            ? 'Signal Trail: Cross-topic recheck passed'
+                            : 'Signal Trail: Cross-topic recheck failed (+3 severity recorded)'}
+                        </span>
+                      </div>
+
+                      {/* Explanation */}
+                      {(qState.result?.explanation || currentRecheck.question.explanation) && (
+                        <div
+                          style={{
+                            fontSize: '12px',
+                            color: isCorrect ? '#166534' : '#881337',
+                            lineHeight: 1.45,
+                            marginTop: '8px',
+                          }}
+                        >
+                          <strong>Explanation: </strong>
+                          {qState.result?.explanation || currentRecheck.question.explanation}
+                        </div>
+                      )}
+
+                      {/* Next / Proceed Button */}
+                      <div style={{ marginTop: '14px', display: 'flex', justifyContent: 'flex-end' }}>
+                        {activeRecheckIndex < rechecks.length - 1 ? (
+                          <button
+                            type="button"
+                            className="btn btn-primary btn-sm"
+                            style={{ fontSize: '12px' }}
+                            onClick={() => setActiveRecheckIndex((prev) => prev + 1)}
+                          >
+                            <span>Next Re-Check</span>
+                            <ArrowRight size={13} />
+                          </button>
+                        ) : (
+                          <button
+                            type="button"
+                            className="btn btn-primary btn-sm"
+                            style={{ fontSize: '12px' }}
+                            onClick={() => setRecheckSkipped(true)}
+                          >
+                            <span>Proceed to Checkpoints</span>
+                            <ArrowRight size={13} />
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              );
+            })()
           ) : (
             /* ==============================================================
                Concept Checkpoint: Professional Single Card Layout
@@ -1393,6 +1923,21 @@ export const PlayerPage: React.FC<PlayerPageProps> = ({
                   <span style={{ fontSize: '11px', fontWeight: 700, color: 'var(--accent-purple)', background: 'var(--accent-soft)', padding: '2px 8px', borderRadius: 'var(--radius-full)' }}>
                     Question {activeQIndex + 1} of {allQuestions.length}
                   </span>
+                  {currentQ && (
+                    <span
+                      style={{
+                        fontSize: '11px',
+                        fontWeight: 700,
+                        padding: '2px 8px',
+                        borderRadius: 'var(--radius-full)',
+                        background: currentQ.question_type === 'mcq' ? '#EEF2FF' : '#FEF3C7',
+                        color: currentQ.question_type === 'mcq' ? '#4F46E5' : '#D97706',
+                        border: `1px solid ${currentQ.question_type === 'mcq' ? '#C7D2FE' : '#FDE68A'}`,
+                      }}
+                    >
+                      {currentQ.question_type === 'mcq' ? 'MCQ' : 'Short Answer'}
+                    </span>
+                  )}
                   {/* Renamed to "Initial Check" instead of "DIAGNOSTIC ORIGINAL" */}
                   {currentQ && (
                     <span
@@ -1442,14 +1987,17 @@ export const PlayerPage: React.FC<PlayerPageProps> = ({
                 </div>
               </div>
 
-              {/* Question Navigation Pills (Q1..Q7): grey dot = unanswered, green = correct, red = incorrect, purple = current */}
+              {/* Question Navigation Pills (Q1..Qn): grey dot = unanswered, green = correct, amber = partial, red = incorrect, purple = current */}
               {allQuestions.length > 1 && (
                 <div style={{ display: 'flex', gap: '6px', overflowX: 'auto', paddingBottom: '8px', marginBottom: '14px' }}>
                   {allQuestions.map((q, idx) => {
                     const isCurrent = activeQIndex === idx;
                     const res = questionResults[q.id];
                     const isSubmitted = Boolean(res?.submitted);
-                    const isCorrect = Boolean(res?.isCorrect);
+                    const verdict = res?.evaluation?.verdict || (res?.isCorrect ? 'correct' : 'incorrect');
+                    const isCorrect = isSubmitted && verdict === 'correct';
+                    const isPartial = isSubmitted && verdict === 'partial';
+                    const isUnanswered = isSubmitted && verdict === 'unanswered';
 
                     return (
                       <button
@@ -1466,6 +2014,10 @@ export const PlayerPage: React.FC<PlayerPageProps> = ({
                             : isSubmitted
                             ? isCorrect
                               ? '#ECFDF5'
+                              : isPartial
+                              ? '#FFFBEB'
+                              : isUnanswered
+                              ? '#F1F5F9'
                               : '#FFF1F2'
                             : 'var(--bg-subtle)',
                           color: isCurrent
@@ -1473,6 +2025,10 @@ export const PlayerPage: React.FC<PlayerPageProps> = ({
                             : isSubmitted
                             ? isCorrect
                               ? '#059669'
+                              : isPartial
+                              ? '#D97706'
+                              : isUnanswered
+                              ? '#475569'
                               : '#E11D48'
                             : 'var(--text-muted)',
                           border: isCurrent
@@ -1480,6 +2036,10 @@ export const PlayerPage: React.FC<PlayerPageProps> = ({
                             : isSubmitted
                             ? isCorrect
                               ? '1px solid #A7F3D0'
+                              : isPartial
+                              ? '1px solid #FDE68A'
+                              : isUnanswered
+                              ? '1px solid #CBD5E1'
                               : '1px solid #FECDD3'
                             : '1px solid var(--border-subtle)',
                           cursor: 'pointer',
@@ -1493,6 +2053,10 @@ export const PlayerPage: React.FC<PlayerPageProps> = ({
                         {isSubmitted ? (
                           isCorrect ? (
                             <CheckCircle2 size={12} color={isCurrent ? '#FFFFFF' : '#10B981'} />
+                          ) : isPartial ? (
+                            <AlertTriangle size={12} color={isCurrent ? '#FFFFFF' : '#D97706'} />
+                          ) : isUnanswered ? (
+                            <HelpCircle size={12} color={isCurrent ? '#FFFFFF' : '#64748B'} />
                           ) : (
                             <AlertCircle size={12} color={isCurrent ? '#FFFFFF' : '#EF4444'} />
                           )
@@ -1531,41 +2095,55 @@ export const PlayerPage: React.FC<PlayerPageProps> = ({
 
                   {/* Options (MCQ) or Textarea (Open-ended): Options are locked when submitted */}
                   {currentQ.question_type === 'mcq' ? (
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', marginBottom: '16px' }}>
-                      {currentQ.options.map((opt, oIdx) => {
-                        const isSelected = currentResult?.selectedAnswer === opt;
-                        const isSubmitted = Boolean(currentResult?.submitted);
-                        return (
-                          <label
-                            key={oIdx}
-                            style={{
-                              display: 'flex',
-                              alignItems: 'center',
-                              gap: '10px',
-                              padding: '10px 14px',
-                              borderRadius: 'var(--radius-md)',
-                              background: isSelected ? 'var(--accent-soft)' : 'var(--bg-subtle)',
-                              border: `1px solid ${isSelected ? 'var(--accent-purple)' : 'var(--border-subtle)'}`,
-                              fontSize: '13px',
-                              cursor: isSubmitted ? 'default' : 'pointer',
-                              opacity: isSubmitted && !isSelected ? 0.75 : 1,
-                              transition: 'all 0.15s ease',
-                            }}
-                          >
-                            <input
-                              type="radio"
-                              name={`checkpoint-${currentQ.id}-option`}
-                              value={opt}
-                              checked={isSelected}
-                              disabled={isSubmitted}
-                              onChange={() => handleSelectOption(opt)}
-                              style={{ accentColor: 'var(--accent-purple)' }}
-                            />
-                            <span style={{ fontWeight: isSelected ? 700 : 400 }}>{opt}</span>
-                          </label>
-                        );
-                      })}
-                    </div>
+                    <>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', marginBottom: '14px' }}>
+                        {currentQ.options.map((opt, oIdx) => {
+                          const isSelected = currentResult?.selectedAnswer === opt;
+                          const isSubmitted = Boolean(currentResult?.submitted);
+                          return (
+                            <label
+                              key={oIdx}
+                              style={{
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: '10px',
+                                padding: '10px 14px',
+                                borderRadius: 'var(--radius-md)',
+                                background: isSelected ? 'var(--accent-soft)' : 'var(--bg-subtle)',
+                                border: `1px solid ${isSelected ? 'var(--accent-purple)' : 'var(--border-subtle)'}`,
+                                fontSize: '13px',
+                                cursor: isSubmitted ? 'default' : 'pointer',
+                                opacity: isSubmitted && !isSelected ? 0.75 : 1,
+                                transition: 'all 0.15s ease',
+                              }}
+                            >
+                              <input
+                                type="radio"
+                                name={`checkpoint-${currentQ.id}-option`}
+                                value={opt}
+                                checked={isSelected}
+                                disabled={isSubmitted}
+                                onChange={() => handleSelectOption(opt)}
+                                style={{ accentColor: 'var(--accent-purple)' }}
+                              />
+                              <span style={{ fontWeight: isSelected ? 700 : 400 }}>{opt}</span>
+                            </label>
+                          );
+                        })}
+                      </div>
+
+                      {/* Source from Lecture (Expandable Section for MCQs) */}
+                      <div style={{ marginBottom: '16px' }}>
+                        <McqSourceSection
+                          lectureTitle={lecture?.title || currentQ.lecture_title}
+                          sourceExcerpt={currentQ.source_excerpt}
+                          sourceTimestamp={currentQ.source_timestamp}
+                          sourceEndTimestamp={currentQ.source_end_timestamp}
+                          lectureDuration={duration || lecture?.duration_seconds}
+                          onWatchThisPart={handleWatchSourcePart}
+                        />
+                      </div>
+                    </>
                   ) : (
                     /* Open-Ended Short Answer Input */
                     <div className="form-group" style={{ marginBottom: '16px' }}>
@@ -1589,7 +2167,7 @@ export const PlayerPage: React.FC<PlayerPageProps> = ({
                         type="button"
                         className="btn btn-primary btn-sm"
                         style={{ width: '100%', height: '36px', fontSize: '13px' }}
-                        disabled={evaluating || !currentResult?.selectedAnswer?.trim()}
+                        disabled={evaluating}
                         onClick={handleSubmitAnswer}
                       >
                         <Send size={14} />
@@ -1599,67 +2177,102 @@ export const PlayerPage: React.FC<PlayerPageProps> = ({
                   )}
 
                   {/* Feedback Block: INSIDE card, DIRECTLY BELOW options, ONLY when submitted */}
-                  {currentResult?.submitted && currentResult?.evaluation && (
-                    <div
-                      style={{
-                        padding: '16px',
-                        borderRadius: 'var(--radius-md)',
-                        marginBottom: '18px',
-                        background: currentResult.isCorrect ? '#F0FDF4' : '#FFF1F2',
-                        border: `1px solid ${currentResult.isCorrect ? '#BBF7D0' : '#FECDD3'}`,
-                      }}
-                    >
-                      {/* Status line: Incorrect red / Correct green + existing "Logged in Database" badge */}
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                          {currentResult.isCorrect ? (
-                            <CheckCircle2 size={18} color="#16A34A" />
-                          ) : (
-                            <AlertCircle size={18} color="#E11D48" />
-                          )}
-                          <span style={{ fontSize: '14px', fontWeight: 800, color: currentResult.isCorrect ? '#16A34A' : '#E11D48' }}>
-                            {currentResult.isCorrect ? 'Correct Answer!' : 'Incorrect Answer — Misconception Detected'}
-                          </span>
-                        </div>
-                        <span
-                          style={{
-                            fontSize: '11px',
-                            fontWeight: 700,
-                            background: currentResult.isCorrect ? '#DCFCE7' : '#FFE4E6',
-                            color: currentResult.isCorrect ? '#15803D' : '#BE123C',
-                            padding: '2px 8px',
-                            borderRadius: '4px',
-                          }}
-                        >
-                          {currentResult.isCorrect ? '+10 Points • Verified' : 'Logged in Database'}
-                        </span>
-                      </div>
+                  {currentResult?.submitted && currentResult?.evaluation && (() => {
+                    const verdict = currentResult.evaluation?.verdict || (currentResult.isCorrect ? 'correct' : 'incorrect');
+                    const isCorrect = verdict === 'correct';
+                    const isPartial = verdict === 'partial';
+                    const isUnanswered = verdict === 'unanswered';
 
-                      {/* Your Answer (red) and Correct Answer (green) */}
-                      <div style={{ background: '#FFFFFF', borderRadius: '6px', padding: '10px 12px', marginBottom: '10px', border: '1px solid #F1F5F9' }}>
-                        <div style={{ fontSize: '12px', marginBottom: '4px' }}>
-                          <span style={{ color: 'var(--text-muted)', fontWeight: 600 }}>Your Answer: </span>
-                          <span style={{ fontWeight: 700, color: currentResult.isCorrect ? '#16A34A' : '#DC2626' }}>
-                            {currentResult.selectedAnswer}
-                          </span>
-                        </div>
-                        <div style={{ fontSize: '12px' }}>
-                          <span style={{ color: 'var(--text-muted)', fontWeight: 600 }}>Correct Answer: </span>
-                          <span style={{ fontWeight: 700, color: '#16A34A' }}>
-                            {currentResult.evaluation.correct_answer || currentQ.correct_answer || 'Not specified'}
-                          </span>
-                        </div>
-                      </div>
+                    const cardBg = isCorrect ? '#F0FDF4' : isPartial ? '#FFFBEB' : isUnanswered ? '#F8FAFC' : '#FFF1F2';
+                    const cardBorder = isCorrect ? '#BBF7D0' : isPartial ? '#FDE68A' : isUnanswered ? '#E2E8F0' : '#FECDD3';
+                    const textColor = isCorrect ? '#16A34A' : isPartial ? '#D97706' : isUnanswered ? '#475569' : '#E11D48';
+                    const badgeBg = isCorrect ? '#DCFCE7' : isPartial ? '#FEF3C7' : isUnanswered ? '#F1F5F9' : '#FFE4E6';
+                    const badgeColor = isCorrect ? '#15803D' : isPartial ? '#92400E' : isUnanswered ? '#475569' : '#BE123C';
+                    const badgeText = isCorrect
+                      ? '+10 Points • Verified'
+                      : isPartial
+                      ? '0 Points • Needs Clarification'
+                      : isUnanswered
+                      ? '0 Points • Unanswered'
+                      : '0 Points • Incorrect';
+                    const statusText = isCorrect
+                      ? 'Correct Answer!'
+                      : isPartial
+                      ? 'Partially Correct — Needs Clarification'
+                      : isUnanswered
+                      ? 'Unanswered / Incomplete Response'
+                      : 'Incorrect Answer — Misconception Detected';
+                    const feedbackText =
+                      currentResult.evaluation.feedback ||
+                      currentResult.evaluation.feedback_reason ||
+                      currentResult.evaluation.explanation ||
+                      currentQ.explanation;
 
-                      {/* Short Explanation (max 2 lines) */}
-                      {(currentResult.evaluation.explanation || currentResult.evaluation.feedback_reason || currentQ.explanation) && (
-                        <div style={{ fontSize: '12px', color: currentResult.isCorrect ? '#166534' : '#881337', lineHeight: 1.45, marginBottom: '12px' }}>
-                          <strong>Explanation: </strong>
-                          <span style={{ display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>
-                            {currentResult.evaluation.explanation || currentResult.evaluation.feedback_reason || currentQ.explanation}
+                    return (
+                      <div
+                        style={{
+                          padding: '16px',
+                          borderRadius: 'var(--radius-md)',
+                          marginBottom: '18px',
+                          background: cardBg,
+                          border: `1px solid ${cardBorder}`,
+                        }}
+                      >
+                        {/* Status line: Incorrect red / Partial amber / Unanswered slate / Correct green */}
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                            {isCorrect ? (
+                              <CheckCircle2 size={18} color="#16A34A" />
+                            ) : isPartial ? (
+                              <AlertTriangle size={18} color="#D97706" />
+                            ) : isUnanswered ? (
+                              <HelpCircle size={18} color="#64748B" />
+                            ) : (
+                              <AlertCircle size={18} color="#E11D48" />
+                            )}
+                            <span style={{ fontSize: '14px', fontWeight: 800, color: textColor }}>
+                              {statusText}
+                            </span>
+                          </div>
+                          <span
+                            style={{
+                              fontSize: '11px',
+                              fontWeight: 700,
+                              background: badgeBg,
+                              color: badgeColor,
+                              padding: '2px 8px',
+                              borderRadius: '4px',
+                            }}
+                          >
+                            {badgeText}
                           </span>
                         </div>
-                      )}
+
+                        {/* Your Answer and Correct Answer */}
+                        <div style={{ background: '#FFFFFF', borderRadius: '6px', padding: '10px 12px', marginBottom: '10px', border: '1px solid #F1F5F9' }}>
+                          <div style={{ fontSize: '12px', marginBottom: '4px' }}>
+                            <span style={{ color: 'var(--text-muted)', fontWeight: 600 }}>Your Answer: </span>
+                            <span style={{ fontWeight: 700, color: isCorrect ? '#16A34A' : isPartial ? '#D97706' : isUnanswered ? '#64748B' : '#DC2626' }}>
+                              {currentResult.selectedAnswer || '(No answer entered)'}
+                            </span>
+                          </div>
+                          <div style={{ fontSize: '12px' }}>
+                            <span style={{ color: 'var(--text-muted)', fontWeight: 600 }}>Correct Answer: </span>
+                            <span style={{ fontWeight: 700, color: '#16A34A' }}>
+                              {currentResult.evaluation.correct_answer || currentQ.correct_answer || 'Not specified'}
+                            </span>
+                          </div>
+                        </div>
+
+                        {/* One-line feedback / Explanation */}
+                        {feedbackText && (
+                          <div style={{ fontSize: '12px', color: isCorrect ? '#166534' : isPartial ? '#78350F' : isUnanswered ? '#334155' : '#881337', lineHeight: 1.45, marginBottom: '12px' }}>
+                            <strong>Feedback: </strong>
+                            <span style={{ display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>
+                              {feedbackText}
+                            </span>
+                          </div>
+                        )}
 
                       {/* Three collapsible sections, collapsed by default:
                           1. "Why this is a trap"
@@ -1710,26 +2323,37 @@ export const PlayerPage: React.FC<PlayerPageProps> = ({
                           </details>
                         )}
 
-                        {/* 3. Source lecture excerpt */}
-                        {(currentQ.source_excerpt || currentResult.evaluation.source_excerpt) && (
-                          <details
-                            style={{
-                              background: '#FFFFFF',
-                              borderRadius: '6px',
-                              border: '1px solid #E2E8F0',
-                              padding: '8px 12px',
-                              fontSize: '12px',
-                              color: '#334155',
-                              cursor: 'pointer',
-                            }}
-                          >
-                            <summary style={{ fontWeight: 700, color: 'var(--primary-navy)', outline: 'none' }}>
-                              Source lecture excerpt
-                            </summary>
-                            <div style={{ marginTop: '8px', lineHeight: 1.5, color: '#475569', fontStyle: 'italic', fontSize: '12px' }}>
-                              "{currentQ.source_excerpt || currentResult.evaluation.source_excerpt}"
-                            </div>
-                          </details>
+                        {/* 3. Source from Lecture */}
+                        {currentQ.question_type === 'mcq' ? (
+                          <McqSourceSection
+                            lectureTitle={lecture?.title || currentQ.lecture_title}
+                            sourceExcerpt={currentQ.source_excerpt || currentResult.evaluation.source_excerpt}
+                            sourceTimestamp={currentQ.source_timestamp ?? currentResult.evaluation.source_timestamp}
+                            sourceEndTimestamp={currentQ.source_end_timestamp ?? currentResult.evaluation.source_end_timestamp}
+                            lectureDuration={duration || lecture?.duration_seconds}
+                            onWatchThisPart={handleWatchSourcePart}
+                          />
+                        ) : (
+                          (currentQ.source_excerpt || currentResult.evaluation.source_excerpt) && (
+                            <details
+                              style={{
+                                background: '#FFFFFF',
+                                borderRadius: '6px',
+                                border: '1px solid #E2E8F0',
+                                padding: '8px 12px',
+                                fontSize: '12px',
+                                color: '#334155',
+                                cursor: 'pointer',
+                              }}
+                            >
+                              <summary style={{ fontWeight: 700, color: 'var(--primary-navy)', outline: 'none' }}>
+                                Source lecture excerpt
+                              </summary>
+                              <div style={{ marginTop: '8px', lineHeight: 1.5, color: '#475569', fontStyle: 'italic', fontSize: '12px' }}>
+                                "{currentQ.source_excerpt || currentResult.evaluation.source_excerpt}"
+                              </div>
+                            </details>
+                          )
                         )}
                       </div>
 
@@ -1769,7 +2393,8 @@ export const PlayerPage: React.FC<PlayerPageProps> = ({
                         </button>
                       </div>
                     </div>
-                  )}
+                  );
+                })()}
 
                   {/* Navigation Buttons: ALWAYS visible at the bottom of the card */}
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', paddingTop: '14px', borderTop: '1px solid #E2E8F0' }}>

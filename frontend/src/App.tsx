@@ -212,6 +212,10 @@ const AppInner: React.FC = () => {
           <ReviewPage
             misconceptionId={selectedMisconceptionId}
             onBack={handleReviewBack}
+            onGoToLecture={(lectureId) => {
+              setSelectedLectureId(lectureId);
+              setActiveTab('player');
+            }}
           />
         );
 

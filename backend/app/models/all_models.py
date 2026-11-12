@@ -2,7 +2,7 @@ import datetime
 import json
 from typing import List, Optional, Dict, Any
 from sqlalchemy import (
-    Column, Integer, String, Float, Boolean, Text, DateTime, ForeignKey, Index, UniqueConstraint
+    Column, Integer, String, Float, Boolean, Text, DateTime, Date, ForeignKey, Index, UniqueConstraint
 )
 from sqlalchemy.orm import relationship
 from app.database import Base
@@ -195,6 +195,7 @@ class Checkpoint(Base):
     target_misconception = Column(Text, nullable=True)
     source_excerpt = Column(Text, nullable=True)
     source_timestamp = Column(Float, nullable=True)
+    source_end_timestamp = Column(Float, nullable=True)
     difficulty = Column(String(20), default="easy", nullable=True)  # easy | moderate
     scenario_text = Column(Text, nullable=True)
 
@@ -307,10 +308,13 @@ class Misconception(Base):
     severity_level = Column(String(20), default="Medium")  # Low, Medium, High
     occurrence_count = Column(Integer, default=1)
 
-    # ── Old status field (KEPT for backward-compat with existing UI/queries) ─
-    status = Column(String(50), default="Unresolved")   # New, Unresolved, Improving, Resolved
+    # ── Status and Lifecycle fields ──────────────────────────────────────────
+    status = Column(String(50), default="open")   # open, improving, resolved, relapse
+    improving_at = Column(Date, nullable=True)
+    recheck_due = Column(Date, nullable=True)
+    relapse_count = Column(Integer, default=0, nullable=True)
 
-    # ── New parallel evidence_status field (state machine from brief) ────────
+    # ── Parallel evidence_status field (state machine from brief) ───────────
     # Suspected -> Confirmed -> Resolved | Memorized; any new evidence after
     # Resolved sets it to Recurred.
     evidence_status = Column(

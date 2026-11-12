@@ -40,7 +40,6 @@ export const UploadPage: React.FC<UploadPageProps> = ({ setActiveTab, onLectureC
   const [title, setTitle] = useState('');
   const [courseCode, setCourseCode] = useState('CS101');
   const [existingLectures, setExistingLectures] = useState<Lecture[]>([]);
-  const [prerequisiteLectureId, setPrerequisiteLectureId] = useState<string>('');
   
   const [isDragging, setIsDragging] = useState(false);
   const [uploading, setUploading] = useState(false);
@@ -75,7 +74,6 @@ export const UploadPage: React.FC<UploadPageProps> = ({ setActiveTab, onLectureC
     setSelectedFile(null);
     setTitle('');
     setCourseCode('CS101');
-    setPrerequisiteLectureId('');
     setQualityWarning(null);
     setIsDuplicate(false);
     setDuplicateLectureData(null);
@@ -157,9 +155,6 @@ export const UploadPage: React.FC<UploadPageProps> = ({ setActiveTab, onLectureC
       formData.append('course_code', courseCode.trim() || 'CS101');
       formData.append('description', '');
       formData.append('file', selectedFile);
-      if (prerequisiteLectureId) {
-        formData.append('prerequisite_lecture_id', prerequisiteLectureId);
-      }
 
       const res = await api.lectures.upload(formData);
       setQualityWarning(res.quality_warning || null);
@@ -519,34 +514,6 @@ export const UploadPage: React.FC<UploadPageProps> = ({ setActiveTab, onLectureC
                 value={courseCode}
                 onChange={(e) => setCourseCode(e.target.value)}
               />
-            </div>
-          </div>
-
-          {/* Prerequisite Lecture Field */}
-          <div className="form-group" style={{ marginBottom: '28px' }}>
-            <label className="form-label" htmlFor="lecture-prerequisite-select">
-              Prerequisite lecture (optional)
-            </label>
-            <select
-              id="lecture-prerequisite-select"
-              className="form-input"
-              value={prerequisiteLectureId}
-              onChange={(e) => setPrerequisiteLectureId(e.target.value)}
-              style={{
-                cursor: 'pointer',
-                background: 'var(--bg-card)',
-                color: 'var(--primary-navy)'
-              }}
-            >
-              <option value="">None</option>
-              {existingLectures.map((lec) => (
-                <option key={lec.id} value={lec.id}>
-                  {lec.title} {lec.course_code ? `(${lec.course_code})` : ''}
-                </option>
-              ))}
-            </select>
-            <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '6px', lineHeight: 1.4 }}>
-              Choose an earlier lecture this one builds on. MindTrace will re-check your unresolved gaps from it first.
             </div>
           </div>
 

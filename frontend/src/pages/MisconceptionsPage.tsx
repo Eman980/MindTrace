@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { api } from '../services/api';
-import type { Misconception } from '../types';
+import type { Misconception, MisconceptionDetail } from '../types';
 import {
   AlertTriangle,
   CheckCircle2,
@@ -41,12 +41,10 @@ export const MisconceptionsPage: React.FC<MisconceptionsPageProps> = ({
   const [priorityFilter, setPriorityFilter] = useState<string>('All');
   const [statusFilter, setStatusFilter] = useState<string>('All');
 
-  // Interactive status update state
-  const [updatingId, setUpdatingId] = useState<number | null>(null);
-  const [statusMessage, setStatusMessage] = useState<string | null>(null);
-
   // Full Details Modal
   const [detailModalItem, setDetailModalItem] = useState<Misconception | null>(null);
+  const [detailData, setDetailData] = useState<MisconceptionDetail | null>(null);
+  const [detailLoading, setDetailLoading] = useState(false);
 
   const loadMisconceptions = async () => {
     setLoading(true);
@@ -68,42 +66,18 @@ export const MisconceptionsPage: React.FC<MisconceptionsPageProps> = ({
     loadMisconceptions();
   }, [priorityFilter, statusFilter]);
 
-  // Handle status update
-  const handleUpdateStatus = async (misconceptionId: number, newStatus: string) => {
-    setUpdatingId(misconceptionId);
-    setStatusMessage(null);
+  // Open details modal - fetch enriched data
+  const handleViewDetails = async (m: Misconception) => {
+    setDetailModalItem(m);
+    setDetailData(null);
+    setDetailLoading(true);
     try {
-      const res = await api.misconceptions.updateStatus(misconceptionId, newStatus);
-      setMisconceptions((prev) =>
-        prev.map((m) =>
-          m.id === misconceptionId
-            ? {
-                ...m,
-                status: res.status,
-                severity_level: res.severity_level as any,
-                severity_score: res.severity_score,
-              }
-            : m
-        )
-      );
-      if (detailModalItem && detailModalItem.id === misconceptionId) {
-        setDetailModalItem((prev) =>
-          prev
-            ? {
-                ...prev,
-                status: res.status,
-                severity_level: res.severity_level as any,
-                severity_score: res.severity_score,
-              }
-            : null
-        );
-      }
-      setStatusMessage(`Status updated to "${newStatus}"`);
-      setTimeout(() => setStatusMessage(null), 3000);
-    } catch (err: any) {
-      setError(err.message || 'Failed to update misconception status');
+      const data = await api.misconceptions.getDetails(m.id);
+      setDetailData(data);
+    } catch {
+      setDetailData(null);
     } finally {
-      setUpdatingId(null);
+      setDetailLoading(false);
     }
   };
 
@@ -136,6 +110,7 @@ export const MisconceptionsPage: React.FC<MisconceptionsPageProps> = ({
       case 'behavioural_replay':
         return <RotateCcw size={14} color="#D97706" />;
       case 'manual_unresolved':
+      case 'manual_status_update':
         return <HelpCircle size={14} color="#DC2626" />;
       case 'checkpoint_resolved':
         return <CheckCircle2 size={14} color="#16A34A" />;
@@ -164,6 +139,7 @@ export const MisconceptionsPage: React.FC<MisconceptionsPageProps> = ({
       case 'Resolved':
         return { bg: '#DCFCE7', text: '#16A34A', border: '#BBF7D0' };
       case 'In Progress':
+      case 'Improving':
         return { bg: '#E0E7FF', text: '#4338CA', border: '#C7D2FE' };
       case 'Needs Review':
         return { bg: '#FEF3C7', text: '#D97706', border: '#FDE68A' };
@@ -208,26 +184,6 @@ export const MisconceptionsPage: React.FC<MisconceptionsPageProps> = ({
         </div>
       </div>
 
-      {statusMessage && (
-        <div
-          style={{
-            padding: '10px 16px',
-            marginBottom: '16px',
-            borderRadius: 'var(--radius-md)',
-            background: '#DCFCE7',
-            color: '#16A34A',
-            border: '1px solid #BBF7D0',
-            fontSize: '13px',
-            fontWeight: 600,
-            display: 'flex',
-            alignItems: 'center',
-            gap: '8px',
-          }}
-        >
-          <Check size={16} />
-          <span>{statusMessage}</span>
-        </div>
-      )}
 
       {/* Search & Filter Toolbar */}
       <div
@@ -312,7 +268,7 @@ export const MisconceptionsPage: React.FC<MisconceptionsPageProps> = ({
             <span style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-muted)', marginRight: '4px' }}>
               Status:
             </span>
-            {['All', 'Unresolved', 'Needs Review', 'In Progress', 'Resolved'].map((s) => (
+            {['All', 'Unresolved', 'Needs Review', 'Improving', 'Resolved'].map((s) => (
               <button
                 key={s}
                 className={`btn btn-sm ${statusFilter === s ? 'btn-accent' : 'btn-secondary'}`}
@@ -387,7 +343,7 @@ export const MisconceptionsPage: React.FC<MisconceptionsPageProps> = ({
             const statusStyle = getStatusBadgeStyle(m.status);
             const severityStyle = getSeverityBadgeStyle(m.severity_level);
             const isResolved = m.status === 'Resolved';
-            const isUpdating = updatingId === m.id;
+            const isUpdating = false; // Status managed by system
 
             return (
               <div
@@ -513,7 +469,7 @@ export const MisconceptionsPage: React.FC<MisconceptionsPageProps> = ({
                   <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
                     <button
                       className="btn btn-secondary btn-sm"
-                      onClick={() => setDetailModalItem(m)}
+                      onClick={() => handleViewDetails(m)}
                       style={{ fontSize: '12px' }}
                     >
                       <Info size={14} />
@@ -610,7 +566,7 @@ export const MisconceptionsPage: React.FC<MisconceptionsPageProps> = ({
                   </div>
                 </div>
 
-                {/* Interactive Status Bar & Signal Summary */}
+                {/* System Status & Signal Summary */}
                 <div
                   style={{
                     display: 'flex',
@@ -623,48 +579,27 @@ export const MisconceptionsPage: React.FC<MisconceptionsPageProps> = ({
                     padding: '12px 16px',
                   }}
                 >
-                  {/* Status Dropdown */}
+                  {/* Read-only Status Badge */}
                   <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                     <span style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-main)' }}>
-                      Update Status:
+                      Status:
                     </span>
-                    <select
-                      value={m.status}
-                      disabled={isUpdating}
-                      onChange={(e) => handleUpdateStatus(m.id, e.target.value)}
+                    <span
                       style={{
-                        padding: '6px 12px',
-                        borderRadius: 'var(--radius-sm)',
-                        border: '1px solid var(--border-strong)',
                         fontSize: '12px',
-                        fontWeight: 600,
-                        background: 'var(--bg-surface)',
-                        color: 'var(--text-main)',
-                        cursor: 'pointer',
-                        outline: 'none',
+                        fontWeight: 700,
+                        padding: '4px 10px',
+                        borderRadius: 'var(--radius-sm)',
+                        background: getStatusBadgeStyle(m.status).bg,
+                        color: getStatusBadgeStyle(m.status).text,
+                        border: `1px solid ${getStatusBadgeStyle(m.status).border}`,
                       }}
                     >
-                      <option value="Unresolved">Unresolved</option>
-                      <option value="Needs Review">Needs Review</option>
-                      <option value="In Progress">In Progress</option>
-                      <option value="Resolved">Resolved</option>
-                    </select>
-
-                    {/* Quick Resolve Button */}
-                    <button
-                      className="btn btn-sm"
-                      onClick={() => handleUpdateStatus(m.id, isResolved ? 'Unresolved' : 'Resolved')}
-                      disabled={isUpdating}
-                      style={{
-                        fontSize: '11px',
-                        padding: '5px 10px',
-                        background: isResolved ? 'var(--bg-surface)' : '#DCFCE7',
-                        color: isResolved ? 'var(--text-muted)' : '#16A34A',
-                        borderColor: isResolved ? 'var(--border-subtle)' : '#BBF7D0',
-                      }}
-                    >
-                      {isResolved ? 'Reopen' : '✓ Mark as Resolved'}
-                    </button>
+                      {m.status}
+                    </span>
+                    <span style={{ fontSize: '11px', color: 'var(--text-muted)', fontStyle: 'italic' }}>
+                      System-managed
+                    </span>
                   </div>
 
                   {/* Signals recorded count */}
@@ -727,7 +662,7 @@ export const MisconceptionsPage: React.FC<MisconceptionsPageProps> = ({
           >
             {/* Close Button */}
             <button
-              onClick={() => setDetailModalItem(null)}
+              onClick={() => { setDetailModalItem(null); setDetailData(null); }}
               style={{
                 position: 'absolute',
                 top: '20px',
@@ -776,7 +711,133 @@ export const MisconceptionsPage: React.FC<MisconceptionsPageProps> = ({
               </div>
             </div>
 
-            {/* In-depth Misconception Details */}
+            {/* Detail Loading Spinner */}
+            {detailLoading && (
+              <div style={{ textAlign: 'center', padding: '24px 0', color: 'var(--text-muted)', fontSize: '14px' }}>
+                <RefreshCw size={18} className="spin-animation" style={{ display: 'inline-block', marginRight: '8px' }} />
+                Loading detailed analysis...
+              </div>
+            )}
+
+            {/* Enriched Detail Sections — shown when detailData loaded */}
+            {!detailLoading && detailData && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '16px', marginBottom: '24px' }}>
+
+                {/* Why It Was Detected */}
+                <div style={{ background: '#FEF9C3', border: '1px solid #FDE68A', borderRadius: 'var(--radius-md)', padding: '14px 16px' }}>
+                  <div style={{ fontSize: '11px', fontWeight: 800, color: '#B45309', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '6px' }}>
+                    Why It Was Detected
+                  </div>
+                  <div style={{ fontSize: '13px', color: '#78350F', lineHeight: 1.6 }}>
+                    {detailData.why_detected}
+                  </div>
+                </div>
+
+                {/* Original Question & Answers */}
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                  <div style={{ background: 'var(--bg-subtle)', borderRadius: 'var(--radius-md)', padding: '12px 16px' }}>
+                    <div style={{ fontSize: '11px', fontWeight: 800, color: 'var(--primary-navy)', textTransform: 'uppercase', marginBottom: '6px' }}>Original Question</div>
+                    <div style={{ fontSize: '13px', color: 'var(--text-main)', lineHeight: 1.5 }}>{detailData.original_question}</div>
+                  </div>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
+                    <div style={{ background: '#FFF5F5', border: '1px solid #FED7D7', borderRadius: 'var(--radius-md)', padding: '12px 14px' }}>
+                      <div style={{ fontSize: '11px', fontWeight: 800, color: '#C53030', marginBottom: '5px', textTransform: 'uppercase' }}>Student's Wrong Answer</div>
+                      <div style={{ fontSize: '13px', color: '#742A2A' }}>{detailData.student_wrong_answer}</div>
+                    </div>
+                    <div style={{ background: '#F0FDF4', border: '1px solid #BBF7D0', borderRadius: 'var(--radius-md)', padding: '12px 14px' }}>
+                      <div style={{ fontSize: '11px', fontWeight: 800, color: '#15803D', marginBottom: '5px', textTransform: 'uppercase' }}>Correct Answer</div>
+                      <div style={{ fontSize: '13px', color: '#166534' }}>{detailData.correct_answer}</div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Detection Evidence */}
+                <div style={{ background: '#EEF2FF', border: '1px solid #C7D2FE', borderRadius: 'var(--radius-md)', padding: '14px 16px' }}>
+                  <div style={{ fontSize: '11px', fontWeight: 800, color: '#3730A3', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '6px' }}>Detection Evidence</div>
+                  <div style={{ fontSize: '13px', color: '#312E81', lineHeight: 1.6 }}>{detailData.detection_evidence}</div>
+                </div>
+
+                {/* Lecture Evidence */}
+                {detailData.lecture_evidence && detailData.lecture_evidence !== 'Evidence not available' ? (
+                  <div style={{ background: '#F0F9FF', border: '1px solid #BAE6FD', borderRadius: 'var(--radius-md)', padding: '14px 16px' }}>
+                    <div style={{ fontSize: '11px', fontWeight: 800, color: '#0369A1', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '6px' }}>
+                      Lecture Evidence
+                    </div>
+                    <div style={{ fontSize: '13px', color: '#0C4A6E', lineHeight: 1.6, fontStyle: 'italic' }}>
+                      "{detailData.lecture_evidence}"
+                    </div>
+                    {detailData.concept_start_time != null && onGoToLecture && (
+                      <button
+                        className="btn btn-secondary btn-sm"
+                        style={{ marginTop: '10px', fontSize: '12px' }}
+                        onClick={() => {
+                          setDetailModalItem(null);
+                          setDetailData(null);
+                          onGoToLecture(detailData.lecture_id);
+                        }}
+                      >
+                        <Video size={13} />
+                        <span>Watch This Part ({formatSeconds(detailData.concept_start_time)})</span>
+                      </button>
+                    )}
+                  </div>
+                ) : (
+                  <div style={{ background: 'var(--bg-subtle)', borderRadius: 'var(--radius-md)', padding: '12px 16px', fontSize: '13px', color: 'var(--text-muted)' }}>
+                    Lecture evidence not available for this misconception.
+                  </div>
+                )}
+
+                {/* Marked Unresolved */}
+                {detailData.marked_unresolved && (
+                  <div style={{ background: '#FEF2F2', border: '1px solid #FECACA', borderRadius: 'var(--radius-md)', padding: '12px 16px' }}>
+                    <div style={{ fontSize: '11px', fontWeight: 800, color: '#B91C1C', textTransform: 'uppercase', marginBottom: '5px' }}>Marked Unresolved</div>
+                    <div style={{ fontSize: '13px', color: '#7F1D1D' }}>{detailData.marked_unresolved_reason || 'System detected incorrect answer.'}</div>
+                  </div>
+                )}
+
+                {/* Assessment History */}
+                {detailData.assessment_history && detailData.assessment_history.length > 0 && (
+                  <div>
+                    <h4 style={{ fontSize: '13px', fontWeight: 700, color: 'var(--primary-navy)', marginBottom: '10px', textTransform: 'uppercase' }}>
+                      Assessment History ({detailData.assessment_history.length})
+                    </h4>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', maxHeight: '220px', overflowY: 'auto' }}>
+                      {detailData.assessment_history.map((attempt, idx) => (
+                        <div key={idx} style={{ background: attempt.is_correct ? '#F0FDF4' : '#FFF5F5', border: `1px solid ${attempt.is_correct ? '#BBF7D0' : '#FED7D7'}`, borderRadius: 'var(--radius-sm)', padding: '10px 14px', fontSize: '13px' }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
+                            <span style={{ fontWeight: 700, color: attempt.is_correct ? '#16A34A' : '#DC2626', fontSize: '12px' }}>
+                              {attempt.is_correct ? '✓ Correct' : '✗ Incorrect'} — {attempt.context_type}
+                            </span>
+                            <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
+                              {attempt.created_at ? new Date(attempt.created_at).toLocaleDateString() : ''}
+                            </span>
+                          </div>
+                          <div style={{ color: 'var(--text-main)', marginBottom: '2px' }}>{attempt.question}</div>
+                          <div style={{ color: attempt.is_correct ? '#166534' : '#742A2A', fontSize: '12px' }}>
+                            Answer: {attempt.student_answer}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Next Reassessment Info */}
+                {detailData.next_reassessment_info && (
+                  <div style={{ background: '#F5F3FF', border: '1px solid #DDD6FE', borderRadius: 'var(--radius-md)', padding: '12px 16px' }}>
+                    <div style={{ fontSize: '11px', fontWeight: 800, color: '#5B21B6', textTransform: 'uppercase', marginBottom: '5px' }}>Next Reassessment</div>
+                    <div style={{ fontSize: '13px', color: '#3B0764' }}>{detailData.next_reassessment_info}</div>
+                    {detailData.recheck_due && (
+                      <div style={{ fontSize: '12px', color: '#6D28D9', marginTop: '4px' }}>Due: {detailData.recheck_due}</div>
+                    )}
+                  </div>
+                )}
+
+              </div>
+            )}
+
+            {/* Fallback: show existing shallow data when detailData not loaded */}
+            {!detailLoading && !detailData && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: '16px', marginBottom: '24px' }}>
               <div>
                 <h4 style={{ fontSize: '13px', fontWeight: 700, color: 'var(--primary-navy)', marginBottom: '4px', textTransform: 'uppercase' }}>
@@ -850,6 +911,7 @@ export const MisconceptionsPage: React.FC<MisconceptionsPageProps> = ({
                 </div>
               </div>
             </div>
+            )}
 
             {/* Modal Actions */}
             <div
@@ -865,22 +927,20 @@ export const MisconceptionsPage: React.FC<MisconceptionsPageProps> = ({
             >
               <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                 <span style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-main)' }}>Status:</span>
-                <select
-                  value={detailModalItem.status}
-                  onChange={(e) => handleUpdateStatus(detailModalItem.id, e.target.value)}
+                <span
                   style={{
-                    padding: '6px 12px',
-                    borderRadius: 'var(--radius-sm)',
-                    border: '1px solid var(--border-strong)',
                     fontSize: '12px',
-                    fontWeight: 600,
+                    fontWeight: 700,
+                    padding: '4px 10px',
+                    borderRadius: 'var(--radius-sm)',
+                    background: getStatusBadgeStyle(detailModalItem.status).bg,
+                    color: getStatusBadgeStyle(detailModalItem.status).text,
+                    border: `1px solid ${getStatusBadgeStyle(detailModalItem.status).border}`,
                   }}
                 >
-                  <option value="Unresolved">Unresolved</option>
-                  <option value="Needs Review">Needs Review</option>
-                  <option value="In Progress">In Progress</option>
-                  <option value="Resolved">Resolved</option>
-                </select>
+                  {detailModalItem.status}
+                </span>
+                <span style={{ fontSize: '11px', color: 'var(--text-muted)', fontStyle: 'italic' }}>System-managed</span>
               </div>
 
               <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
@@ -900,6 +960,7 @@ export const MisconceptionsPage: React.FC<MisconceptionsPageProps> = ({
                   className="btn btn-primary btn-sm"
                   onClick={() => {
                     setDetailModalItem(null);
+                    setDetailData(null);
                     onReviewConcept(detailModalItem.id);
                   }}
                 >

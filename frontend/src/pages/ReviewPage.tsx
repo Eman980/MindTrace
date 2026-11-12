@@ -14,11 +14,12 @@ import {
   Clock,
   BookOpen
 } from 'lucide-react';
+import { McqSourceSection } from '../components/McqSourceSection';
 
 interface ReviewPageProps {
   misconceptionId: number;
   onBack: () => void;
-  onGoToLecture?: (lectureId: number) => void;
+  onGoToLecture?: (lectureId: number, timestamp?: number) => void;
 }
 
 export const ReviewPage: React.FC<ReviewPageProps> = ({
@@ -244,6 +245,7 @@ export const ReviewPage: React.FC<ReviewPageProps> = ({
             </div>
 
             {review_checkpoint.question_type === 'mcq' ? (
+              <>
               <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', marginBottom: '20px' }}>
                 {review_checkpoint.options.map((opt, idx) => (
                   <label
@@ -273,6 +275,18 @@ export const ReviewPage: React.FC<ReviewPageProps> = ({
                   </label>
                 ))}
               </div>
+
+                {/* Source from Lecture */}
+                <div style={{ marginBottom: '20px' }}>
+                  <McqSourceSection
+                    lectureTitle={review_checkpoint.lecture_title || (data?.misconception ? data.misconception.concept_name : 'Lecture')}
+                    sourceExcerpt={review_checkpoint.source_excerpt}
+                    sourceTimestamp={review_checkpoint.source_timestamp}
+                    sourceEndTimestamp={review_checkpoint.source_end_timestamp}
+                    onWatchThisPart={onGoToLecture && data?.misconception ? (ts) => onGoToLecture(data.misconception.lecture_id, ts) : undefined}
+                  />
+                </div>
+              </>
             ) : (
               <div className="form-group" style={{ marginBottom: '20px' }}>
                 <textarea

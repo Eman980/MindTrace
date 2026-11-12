@@ -1,6 +1,6 @@
 from pydantic import BaseModel, EmailStr, Field
 from typing import List, Optional, Any, Dict
-from datetime import datetime
+from datetime import datetime, date
 
 # --- Auth & User ---
 class UserCreate(BaseModel):
@@ -105,6 +105,10 @@ class CheckpointOut(BaseModel):
     target_misconception: Optional[str] = None
     source_excerpt: Optional[str] = None
     source_timestamp: Optional[float] = None
+    source_start_timestamp: Optional[float] = None
+    source_end_timestamp: Optional[float] = None
+    lecture_id: Optional[int] = None
+    lecture_title: Optional[str] = None
     difficulty: Optional[str] = "easy"
     scenario_text: Optional[str] = None
     attempts: List[CheckpointAttemptDetailOut] = []
@@ -135,6 +139,8 @@ class CheckpointEvaluationOut(BaseModel):
     misconception_created_or_updated: bool = False
     new_severity_level: Optional[str] = None
     grade: Optional[str] = None
+    verdict: Optional[str] = None
+    feedback: Optional[str] = None
     missing_point: Optional[str] = None
     # ── Misconception Deep Treatment Breakdown ────────────────────────────────
     conceptual_trap: Optional[str] = None
@@ -144,16 +150,23 @@ class CheckpointEvaluationOut(BaseModel):
     concept_title: Optional[str] = None
     source_excerpt: Optional[str] = None
     source_timestamp: Optional[float] = None
+    source_start_timestamp: Optional[float] = None
+    source_end_timestamp: Optional[float] = None
+    lecture_id: Optional[int] = None
+    lecture_title: Optional[str] = None
     # ── Attempt Sequence & History ───────────────────────────────────────────
     attempt_id: Optional[int] = None
     attempt_number: Optional[int] = 1
     total_attempts: Optional[int] = 1
     attempts: List[CheckpointAttemptDetailOut] = []
-    # ── New explanation-check fields ─────────────────────────────────────────
+    # ── Evidence state machine fields ─────────────────────────────────────────
     explanation_verdict: Optional[str] = None   # valid|too_brief|flawed_*|not_checked
     verdict_reason: Optional[str] = None         # one-sentence explanation for the UI
     needs_followup: bool = False                 # True if a variant/transfer item is due
     evidence_status: Optional[str] = None        # Suspected|Confirmed|Resolved|Recurred
+    misconception_status: Optional[str] = None   # open|improving|resolved
+    recheck_due: Optional[str] = None
+    misconception_id: Optional[str] = None
 
 
 # --- Concepts ---
@@ -303,12 +316,54 @@ class MisconceptionOut(BaseModel):
     recurrence_count: Optional[int] = 0
     remediation_segment_id: Optional[int] = None
     resolved_at: Optional[datetime] = None
+    improving_at: Optional[date] = None
+    recheck_due: Optional[date] = None
+    relapse_count: Optional[int] = 0
+    # ── Root-cause prerequisite info ──────────────────────────────────────────
+    root_cause_concept: Optional[str] = None
+    root_cause_lecture_title: Optional[str] = None
+    root_cause_lecture_id: Optional[int] = None
 
     class Config:
         from_attributes = True
 
 class MisconceptionStatusUpdateIn(BaseModel):
     status: str
+
+class MisconceptionAttemptHistoryItem(BaseModel):
+    question: str
+    student_answer: str
+    correct_answer: Optional[str] = None
+    is_correct: bool
+    context_type: str = "checkpoint"
+    explanation: Optional[str] = None
+    created_at: Optional[str] = None
+
+class MisconceptionDetailOut(BaseModel):
+    id: int
+    concept_id: int
+    concept_name: str
+    lecture_id: int
+    lecture_title: str
+    why_detected: str
+    original_question: str
+    student_wrong_answer: str
+    correct_answer: str
+    detection_evidence: str
+    lecture_evidence: str
+    concept_start_time: float
+    concept_end_time: float
+    marked_unresolved: bool
+    marked_unresolved_reason: str
+    status: str
+    severity_level: str
+    severity_score: int
+    improving_at: Optional[str] = None
+    recheck_due: Optional[str] = None
+    next_reassessment_info: Optional[str] = None
+    relapse_count: int
+    resolved_at: Optional[str] = None
+    assessment_history: List[MisconceptionAttemptHistoryItem] = []
 
 class MisconceptionReviewOut(BaseModel):
     misconception: MisconceptionOut
@@ -416,4 +471,40 @@ class PrerequisiteRecheckSubmitOut(BaseModel):
     new_severity_level: str
     new_severity_score: int
     message: str
+
+
+# --- Disguise Test Lifecycle Schemas ---
+class DisguiseQuestionOut(BaseModel):
+    misconception_id: str
+    concept: str
+    status: str
+    question: str
+    options: List[str]
+    recheck_due: Optional[str] = None
+    message: str = "Disguise test question ready. Choose the correct option to verify conceptual mastery."
+
+class DisguiseAnswerIn(BaseModel):
+    selected_index: Optional[int] = None
+    student_answer: Optional[str] = None
+
+class DisguiseAnswerOut(BaseModel):
+    misconception_id: str
+    concept: str
+    is_correct: bool
+    new_status: str
+    correct_index: int
+    explanation: str
+    relapse_count: int
+    message: str
+
+class RecheckDueItemOut(BaseModel):
+    id: str
+    misconception_id: str
+    concept_name: str
+    concept: Optional[str] = None
+    original_question: Optional[str] = None
+    improving_at: Optional[str] = None
+    recheck_due: str
+    relapse_count: int = 0
+    status: str = "improving"
 

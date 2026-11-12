@@ -3,6 +3,7 @@ import type {
   DashboardStats,
   Lecture,
   Misconception,
+  MisconceptionEvidence,
   MisconceptionReviewData,
   MisconceptionStats,
   CheckpointEvaluation,
@@ -10,6 +11,9 @@ import type {
   User,
   ReprobeItem,
   MisconceptionLedgerItem,
+  PrerequisiteRecheck,
+  PrerequisiteRecheckSubmitResult,
+  MisconceptionDetail,
 } from '../types';
 
 const API_BASE = 'http://127.0.0.1:8000/api/v1';
@@ -102,6 +106,28 @@ export const api = {
   lectures: {
     list: () => request<Lecture[]>('/lectures'),
     get: (id: number) => request<Lecture>(`/lectures/${id}`),
+    update: (
+      id: number,
+      data: {
+        title?: string;
+        description?: string;
+        course_code?: string;
+        prerequisite_lecture_id?: number | null;
+      }
+    ) =>
+      request<{
+        success: boolean;
+        message: string;
+        id: number;
+        title: string;
+        course_code?: string;
+        description?: string;
+        prerequisite_lecture_id?: number | null;
+        prerequisite_lecture_title?: string | null;
+      }>(`/lectures/${id}`, {
+        method: 'PATCH',
+        body: JSON.stringify(data),
+      }),
     rename: (id: number, data: string | { title: string; description?: string; course_code?: string }) => {
       const payload = typeof data === 'string' ? { title: data } : data;
       return request<{ success: boolean; message: string; id: number; title: string; course_code?: string; description?: string }>(
@@ -140,6 +166,16 @@ export const api = {
         method: 'DELETE',
       }),
     getMediaUrl: (lectureId: number) => `${API_BASE}/lectures/${lectureId}/media`,
+    getRechecks: (lectureId: number) =>
+      request<PrerequisiteRecheck[]>(`/lectures/${lectureId}/rechecks`),
+    submitRecheck: (
+      lectureId: number,
+      data: { misconception_id: number; checkpoint_id: number; student_answer: string }
+    ) =>
+      request<PrerequisiteRecheckSubmitResult>(`/lectures/${lectureId}/rechecks/submit`, {
+        method: 'POST',
+        body: JSON.stringify(data),
+      }),
   },
 
   concepts: {
@@ -206,6 +242,7 @@ export const api = {
     getLedger: () => request<MisconceptionLedgerItem[]>('/misconceptions/ledger'),
     getReprobe: () => request<ReprobeItem[]>('/misconceptions/reprobe'),
     getReview: (id: number) => request<MisconceptionReviewData>(`/misconceptions/${id}/review`),
+    getDetails: (id: number) => request<MisconceptionDetail>(`/misconceptions/${id}/details`),
     resolve: (id: number, data: { checkpoint_id: number; student_answer: string }) =>
       request<{
         is_correct: boolean;
@@ -226,7 +263,8 @@ export const api = {
         status: string;
         severity_level: string;
         severity_score: number;
-        resolved_at?: string;
+        resolved_at?: string | null;
+        evidence_entry?: MisconceptionEvidence;
       }>(`/misconceptions/${id}/status`, {
         method: 'PATCH',
         body: JSON.stringify({ status }),
