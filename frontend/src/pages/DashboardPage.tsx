@@ -1,20 +1,21 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import { api } from '../services/api';
-import type { DashboardStats } from '../types';
+import type { DashboardStats, Lecture } from '../types';
 import {
   Video,
   Brain,
   AlertTriangle,
   CheckCircle2,
-  Clock,
   ArrowRight,
-  Sparkles,
   Upload,
   RefreshCw,
-  PlusCircle,
-  HelpCircle,
-  TrendingUp,
-  FileQuestion
+  FileQuestion,
+  MoreVertical,
+  Edit3,
+  Trash2,
+  ExternalLink,
+  X,
+  Check
 } from 'lucide-react';
 
 interface DashboardPageProps {
@@ -26,8 +27,22 @@ interface DashboardPageProps {
 export const DashboardPage: React.FC<DashboardPageProps> = ({ setActiveTab, onSelectLecture }) => {
   const [stats, setStats] = useState<DashboardStats | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
-  const [seeding, setSeeding] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
+  const [successMessage, setSuccessMessage] = useState<string | null>(null);
+
+  // 3-dot dropdown menu state
+  const [openMenuId, setOpenMenuId] = useState<number | null>(null);
+  const menuRef = useRef<HTMLDivElement | null>(null);
+
+  // Rename Modal State
+  const [renameModalLecture, setRenameModalLecture] = useState<{ id: number; title: string } | null>(null);
+  const [newTitle, setNewTitle] = useState<string>('');
+  const [renameSaving, setRenameSaving] = useState<boolean>(false);
+  const [renameError, setRenameError] = useState<string | null>(null);
+
+  // Delete Modal State
+  const [deleteModalLecture, setDeleteModalLecture] = useState<{ id: number; title: string } | null>(null);
+  const [deleteDeleting, setDeleteDeleting] = useState<boolean>(false);
 
   const loadStats = async () => {
     setLoading(true);
@@ -46,15 +61,69 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ setActiveTab, onSe
     loadStats();
   }, []);
 
-  const handleSeedDemo = async () => {
-    setSeeding(true);
+  // Close 3-dot menu when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (menuRef.current && !menuRef.current.contains(event.target as Node)) {
+        setOpenMenuId(null);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
+
+
+  // Open rename modal
+  const handleOpenRename = (lec: { id: number; title: string }) => {
+    setOpenMenuId(null);
+    setRenameModalLecture(lec);
+    setNewTitle(lec.title);
+    setRenameError(null);
+  };
+
+  // Save renamed title
+  const handleSaveRename = async () => {
+    if (!renameModalLecture) return;
+    if (!newTitle.trim()) {
+      setRenameError('Lecture title cannot be empty.');
+      return;
+    }
+    setRenameSaving(true);
+    setRenameError(null);
     try {
-      await api.demo.seed();
+      await api.lectures.rename(renameModalLecture.id, newTitle.trim());
+      setSuccessMessage(`Lecture renamed to "${newTitle.trim()}".`);
+      setTimeout(() => setSuccessMessage(null), 3000);
+      setRenameModalLecture(null);
       await loadStats();
     } catch (err: any) {
-      alert(`Could not seed demo lecture: ${err.message}`);
+      setRenameError(err.message || 'Failed to rename lecture.');
     } finally {
-      setSeeding(false);
+      setRenameSaving(false);
+    }
+  };
+
+  // Open delete single lecture confirmation
+  const handleOpenDelete = (lec: { id: number; title: string }) => {
+    setOpenMenuId(null);
+    setDeleteModalLecture(lec);
+  };
+
+  // Confirm delete single lecture
+  const handleConfirmDelete = async () => {
+    if (!deleteModalLecture) return;
+    setDeleteDeleting(true);
+    try {
+      await api.lectures.delete(deleteModalLecture.id);
+      setSuccessMessage(`Deleted "${deleteModalLecture.title}".`);
+      setTimeout(() => setSuccessMessage(null), 3000);
+      setDeleteModalLecture(null);
+      await loadStats();
+    } catch (err: any) {
+      setError(err.message || 'Failed to delete lecture.');
+    } finally {
+      setDeleteDeleting(false);
     }
   };
 
@@ -86,24 +155,14 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ setActiveTab, onSe
   return (
     <div>
       {/* Header with Title and Action buttons */}
-      <div className="section-header">
+      <div className="section-header" style={{ marginBottom: '24px' }}>
         <div>
           <h1 className="section-title">Student Learning Dashboard</h1>
           <p className="section-subtitle">
             Evidence-based misconception tracking and lecture concept mastery.
           </p>
         </div>
-        <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
-          <button
-            id="dash-seed-demo-btn"
-            className="btn btn-secondary btn-sm"
-            onClick={handleSeedDemo}
-            disabled={seeding}
-            title="Reloads the standard Functions demo lecture"
-          >
-            <Sparkles size={14} color="var(--accent-purple)" />
-            <span>{seeding ? 'Seeding...' : 'Load Sample Lecture'}</span>
-          </button>
+        <div style={{ display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap' }}>
           <button
             id="dash-upload-btn"
             className="btn btn-primary btn-sm"
@@ -115,8 +174,29 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ setActiveTab, onSe
         </div>
       </div>
 
+      {successMessage && (
+        <div
+          style={{
+            padding: '12px 18px',
+            marginBottom: '20px',
+            borderRadius: 'var(--radius-md)',
+            background: '#DCFCE7',
+            color: '#16A34A',
+            border: '1px solid #BBF7D0',
+            fontSize: '13px',
+            fontWeight: 600,
+            display: 'flex',
+            alignItems: 'center',
+            gap: '8px',
+          }}
+        >
+          <Check size={16} />
+          <span>{successMessage}</span>
+        </div>
+      )}
+
       {error && (
-        <div className="alert-banner alert-warning">
+        <div className="alert-banner alert-warning" style={{ marginBottom: '20px' }}>
           <span>{error}</span>
         </div>
       )}
@@ -174,134 +254,82 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ setActiveTab, onSe
         </div>
       </div>
 
-      {/* Misconception Priority Breakdown & Quick Summary */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: '24px', marginBottom: '36px' }}>
-        <div className="card">
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '18px' }}>
+      {/* Misconception Priority Profile */}
+      <div className="card" style={{ marginBottom: '36px' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '18px' }}>
+          <div>
             <h3 style={{ fontSize: '18px', fontWeight: 700, color: 'var(--primary-navy)' }}>
               Misconception Priority Profile
             </h3>
-            <button
-              id="view-all-misconceptions-btn"
-              className="btn btn-secondary btn-sm"
-              onClick={() => setActiveTab('misconceptions')}
-            >
-              <span>View All</span>
-              <ArrowRight size={14} />
-            </button>
+            <p style={{ fontSize: '13px', color: 'var(--text-muted)', marginTop: '2px' }}>
+              Active tracking across detected high, medium, and low severity conceptual friction points.
+            </p>
           </div>
-
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '12px' }}>
-            <div
-              style={{
-                background: 'var(--priority-high-bg)',
-                border: '1px solid var(--priority-high-border)',
-                borderRadius: 'var(--radius-md)',
-                padding: '14px',
-              }}
-            >
-              <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--priority-high-text)', textTransform: 'uppercase' }}>
-                High Priority
-              </div>
-              <div style={{ fontSize: '24px', fontWeight: 800, color: 'var(--priority-high-text)', marginTop: '4px' }}>
-                {stats?.misconception_summary.high_priority || 0}
-              </div>
-              <div style={{ fontSize: '12px', color: '#991B1B', marginTop: '2px' }}>
-                Require immediate conceptual review
-              </div>
-            </div>
-
-            <div
-              style={{
-                background: 'var(--priority-med-bg)',
-                border: '1px solid var(--priority-med-border)',
-                borderRadius: 'var(--radius-md)',
-                padding: '14px',
-              }}
-            >
-              <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--priority-med-text)', textTransform: 'uppercase' }}>
-                Medium Priority
-              </div>
-              <div style={{ fontSize: '24px', fontWeight: 800, color: 'var(--priority-med-text)', marginTop: '4px' }}>
-                {stats?.misconception_summary.medium_priority || 0}
-              </div>
-              <div style={{ fontSize: '12px', color: '#92400E', marginTop: '2px' }}>
-                Multiple friction points detected
-              </div>
-            </div>
-
-            <div
-              style={{
-                background: 'var(--priority-low-bg)',
-                border: '1px solid var(--priority-low-border)',
-                borderRadius: 'var(--radius-md)',
-                padding: '14px',
-              }}
-            >
-              <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--priority-low-text)', textTransform: 'uppercase' }}>
-                Low Priority
-              </div>
-              <div style={{ fontSize: '24px', fontWeight: 800, color: 'var(--priority-low-text)', marginTop: '4px' }}>
-                {stats?.misconception_summary.low_priority || 0}
-              </div>
-              <div style={{ fontSize: '12px', color: '#1E40AF', marginTop: '2px' }}>
-                Minor checkpoint slip
-              </div>
-            </div>
-
-            <div
-              style={{
-                background: 'var(--status-resolved-bg)',
-                border: '1px solid var(--status-resolved-border)',
-                borderRadius: 'var(--radius-md)',
-                padding: '14px',
-              }}
-            >
-              <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--status-resolved-text)', textTransform: 'uppercase' }}>
-                Resolved
-              </div>
-              <div style={{ fontSize: '24px', fontWeight: 800, color: 'var(--status-resolved-text)', marginTop: '4px' }}>
-                {stats?.misconception_summary.resolved || 0}
-              </div>
-              <div style={{ fontSize: '12px', color: '#166534', marginTop: '2px' }}>
-                Successfully verified in review
-              </div>
-            </div>
-          </div>
+          <button
+            id="view-all-misconceptions-btn"
+            className="btn btn-secondary btn-sm"
+            onClick={() => setActiveTab('misconceptions')}
+          >
+            <span>View All Misconceptions</span>
+            <ArrowRight size={14} />
+          </button>
         </div>
 
-        {/* Cognitive Telemetry Box */}
-        <div className="card">
-          <h3 style={{ fontSize: '18px', fontWeight: 700, color: 'var(--primary-navy)', marginBottom: '8px' }}>
-            Why Persistent Tracking Matters
-          </h3>
-          <p style={{ fontSize: '14px', color: 'var(--text-muted)', lineHeight: 1.5, marginBottom: '16px' }}>
-            MindTrace links your lecture player behavior directly to knowledge retention.
-          </p>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-            <div style={{ display: 'flex', alignItems: 'flex-start', gap: '12px' }}>
-              <div style={{ background: 'var(--accent-soft)', color: 'var(--accent-purple)', padding: '6px', borderRadius: 'var(--radius-md)' }}>
-                <Clock size={16} />
-              </div>
-              <div style={{ fontSize: '13px' }}>
-                <strong>Replay Threshold:</strong> Replaying a concept segment 3 or more times automatically tags it for review.
-              </div>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '14px' }}>
+          <div
+            style={{
+              background: 'var(--priority-high-bg)',
+              border: '1px solid var(--priority-high-border)',
+              borderRadius: 'var(--radius-md)',
+              padding: '16px',
+            }}
+          >
+            <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--priority-high-text)', textTransform: 'uppercase' }}>
+              High Priority
             </div>
-            <div style={{ display: 'flex', alignItems: 'flex-start', gap: '12px' }}>
-              <div style={{ background: '#FEE2E2', color: '#DC2626', padding: '6px', borderRadius: 'var(--radius-md)' }}>
-                <HelpCircle size={16} />
-              </div>
-              <div style={{ fontSize: '13px' }}>
-                <strong>Unresolved Flag:</strong> Clicking 'Mark as Unresolved' during a lecture stores explicit student feedback.
-              </div>
+            <div style={{ fontSize: '26px', fontWeight: 800, color: 'var(--priority-high-text)', marginTop: '4px' }}>
+              {stats?.misconception_summary.high_priority || 0}
             </div>
-            <div style={{ display: 'flex', alignItems: 'flex-start', gap: '12px' }}>
-              <div style={{ background: '#DCFCE7', color: '#16A34A', padding: '6px', borderRadius: 'var(--radius-md)' }}>
-                <TrendingUp size={16} />
-              </div>
-              <div style={{ fontSize: '13px' }}>
-                <strong>Active Resolution:</strong> Misconceptions do not disappear until you demonstrate mastery on review questions.
-              </div>
+            <div style={{ fontSize: '12px', color: '#991B1B', marginTop: '2px' }}>
+              Require immediate conceptual review
+            </div>
+          </div>
+
+          <div
+            style={{
+              background: 'var(--priority-med-bg)',
+              border: '1px solid var(--priority-med-border)',
+              borderRadius: 'var(--radius-md)',
+              padding: '16px',
+            }}
+          >
+            <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--priority-med-text)', textTransform: 'uppercase' }}>
+              Medium Priority
+            </div>
+            <div style={{ fontSize: '26px', fontWeight: 800, color: 'var(--priority-med-text)', marginTop: '4px' }}>
+              {stats?.misconception_summary.medium_priority || 0}
+            </div>
+            <div style={{ fontSize: '12px', color: '#92400E', marginTop: '2px' }}>
+              Multiple friction points detected
+            </div>
+          </div>
+
+          <div
+            style={{
+              background: 'var(--priority-low-bg)',
+              border: '1px solid var(--priority-low-border)',
+              borderRadius: 'var(--radius-md)',
+              padding: '16px',
+            }}
+          >
+            <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--priority-low-text)', textTransform: 'uppercase' }}>
+              Low Priority
+            </div>
+            <div style={{ fontSize: '26px', fontWeight: 800, color: 'var(--priority-low-text)', marginTop: '4px' }}>
+              {stats?.misconception_summary.low_priority || 0}
+            </div>
+            <div style={{ fontSize: '12px', color: '#1E40AF', marginTop: '2px' }}>
+              Minor checkpoint slip
             </div>
           </div>
         </div>
@@ -332,13 +360,9 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ setActiveTab, onSe
               No lectures uploaded yet
             </h3>
             <p style={{ fontSize: '14px', color: 'var(--text-muted)', maxWidth: '440px', margin: '6px auto 20px' }}>
-              Upload your first lecture recording or load the built-in 'Introduction to Functions' sample lecture.
+              Upload your first lecture recording (.mp4, .mov, .webm, .wav, .mp3, .ogg) to start tracking learning concepts and persistent misconceptions.
             </p>
             <div style={{ display: 'flex', gap: '12px', justifyContent: 'center' }}>
-              <button className="btn btn-accent btn-sm" onClick={handleSeedDemo} disabled={seeding}>
-                <Sparkles size={14} />
-                <span>Load Sample Lecture</span>
-              </button>
               <button className="btn btn-primary btn-sm" onClick={() => setActiveTab('upload')}>
                 <Upload size={14} />
                 <span>Upload Lecture</span>
@@ -348,7 +372,7 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ setActiveTab, onSe
         ) : (
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: '20px' }}>
             {stats.recent_lectures.map((lec) => (
-              <div key={lec.id} className="card card-hover" style={{ display: 'flex', flexDirection: 'column' }}>
+              <div key={lec.id} className="card card-hover" style={{ display: 'flex', flexDirection: 'column', position: 'relative' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '12px' }}>
                   <div>
                     <span
@@ -379,9 +403,129 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ setActiveTab, onSe
                       </span>
                     )}
                   </div>
-                  <span style={{ fontSize: '12px', color: 'var(--text-light)' }}>
-                    {formatDate(lec.created_at)}
-                  </span>
+
+                  {/* Top-Right: Date & 3-dot menu */}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    <span style={{ fontSize: '12px', color: 'var(--text-light)' }}>
+                      {formatDate(lec.created_at)}
+                    </span>
+
+                    {/* 3-dot menu button */}
+                    <div style={{ position: 'relative' }}>
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setOpenMenuId(openMenuId === lec.id ? null : lec.id);
+                        }}
+                        style={{
+                          background: 'transparent',
+                          border: 'none',
+                          cursor: 'pointer',
+                          color: 'var(--text-muted)',
+                          padding: '4px',
+                          borderRadius: 'var(--radius-sm)',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                        }}
+                        title="Lecture options"
+                      >
+                        <MoreVertical size={16} />
+                      </button>
+
+                      {/* Dropdown Menu */}
+                      {openMenuId === lec.id && (
+                        <div
+                          ref={menuRef}
+                          style={{
+                            position: 'absolute',
+                            top: '100%',
+                            right: 0,
+                            marginTop: '4px',
+                            background: 'var(--bg-surface)',
+                            border: '1px solid var(--border-subtle)',
+                            borderRadius: 'var(--radius-md)',
+                            boxShadow: 'var(--shadow-lg)',
+                            zIndex: 100,
+                            minWidth: '160px',
+                            overflow: 'hidden',
+                          }}
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          <button
+                            onClick={() => {
+                              setOpenMenuId(null);
+                              onSelectLecture(lec.id);
+                            }}
+                            style={{
+                              width: '100%',
+                              padding: '10px 14px',
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: '8px',
+                              background: 'transparent',
+                              border: 'none',
+                              fontSize: '13px',
+                              color: 'var(--text-main)',
+                              cursor: 'pointer',
+                              textAlign: 'left',
+                            }}
+                            onMouseEnter={(e) => (e.currentTarget.style.background = 'var(--bg-subtle)')}
+                            onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
+                          >
+                            <ExternalLink size={14} color="var(--primary-accent)" />
+                            <span>Open Lecture</span>
+                          </button>
+
+                          <button
+                            onClick={() => handleOpenRename(lec)}
+                            style={{
+                              width: '100%',
+                              padding: '10px 14px',
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: '8px',
+                              background: 'transparent',
+                              border: 'none',
+                              fontSize: '13px',
+                              color: 'var(--text-main)',
+                              cursor: 'pointer',
+                              textAlign: 'left',
+                            }}
+                            onMouseEnter={(e) => (e.currentTarget.style.background = 'var(--bg-subtle)')}
+                            onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
+                          >
+                            <Edit3 size={14} color="var(--accent-purple)" />
+                            <span>Rename Lecture</span>
+                          </button>
+
+                          <div style={{ height: '1px', background: 'var(--border-subtle)' }} />
+
+                          <button
+                            onClick={() => handleOpenDelete(lec)}
+                            style={{
+                              width: '100%',
+                              padding: '10px 14px',
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: '8px',
+                              background: 'transparent',
+                              border: 'none',
+                              fontSize: '13px',
+                              color: '#DC2626',
+                              cursor: 'pointer',
+                              textAlign: 'left',
+                            }}
+                            onMouseEnter={(e) => (e.currentTarget.style.background = '#FEE2E2')}
+                            onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
+                          >
+                            <Trash2 size={14} color="#DC2626" />
+                            <span>Delete Lecture</span>
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  </div>
                 </div>
 
                 <h3 style={{ fontSize: '18px', fontWeight: 800, color: 'var(--primary-navy)', marginBottom: '8px', lineHeight: 1.3 }}>
@@ -459,6 +603,161 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ setActiveTab, onSe
           </div>
         )}
       </div>
+
+      {/* Rename Lecture Modal */}
+      {renameModalLecture && (
+        <div
+          style={{
+            position: 'fixed',
+            inset: 0,
+            background: 'rgba(11, 19, 43, 0.65)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 1000,
+            padding: '20px',
+            backdropFilter: 'blur(3px)',
+          }}
+          onClick={() => !renameSaving && setRenameModalLecture(null)}
+        >
+          <div
+            className="card"
+            style={{ maxWidth: '480px', width: '100%', padding: '24px' }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <Edit3 size={18} color="var(--accent-purple)" />
+                <h3 style={{ fontSize: '18px', fontWeight: 800, color: 'var(--primary-navy)' }}>Rename Lecture</h3>
+              </div>
+              <button
+                onClick={() => setRenameModalLecture(null)}
+                disabled={renameSaving}
+                style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--text-muted)' }}
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            {renameError && (
+              <div style={{ padding: '8px 12px', background: '#FEE2E2', color: '#DC2626', borderRadius: 'var(--radius-sm)', fontSize: '13px', marginBottom: '12px' }}>
+                {renameError}
+              </div>
+            )}
+
+            <div style={{ marginBottom: '20px' }}>
+              <label style={{ display: 'block', fontSize: '13px', fontWeight: 700, color: 'var(--text-main)', marginBottom: '6px' }}>
+                Lecture Title
+              </label>
+              <input
+                type="text"
+                value={newTitle}
+                onChange={(e) => setNewTitle(e.target.value)}
+                disabled={renameSaving}
+                placeholder="Enter lecture title..."
+                style={{
+                  width: '100%',
+                  padding: '10px 14px',
+                  borderRadius: 'var(--radius-md)',
+                  border: '1px solid var(--border-strong)',
+                  fontSize: '14px',
+                  fontFamily: 'inherit',
+                  outline: 'none',
+                  boxSizing: 'border-box',
+                }}
+                autoFocus
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') handleSaveRename();
+                }}
+              />
+            </div>
+
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
+              <button
+                className="btn btn-secondary btn-sm"
+                onClick={() => setRenameModalLecture(null)}
+                disabled={renameSaving}
+              >
+                Cancel
+              </button>
+              <button
+                className="btn btn-primary btn-sm"
+                onClick={handleSaveRename}
+                disabled={renameSaving || !newTitle.trim()}
+              >
+                {renameSaving ? 'Saving...' : 'Save Title'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Delete Single Lecture Modal */}
+      {deleteModalLecture && (
+        <div
+          style={{
+            position: 'fixed',
+            inset: 0,
+            background: 'rgba(11, 19, 43, 0.65)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 1000,
+            padding: '20px',
+            backdropFilter: 'blur(3px)',
+          }}
+          onClick={() => !deleteDeleting && setDeleteModalLecture(null)}
+        >
+          <div
+            className="card"
+            style={{ maxWidth: '440px', width: '100%', padding: '24px' }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '14px' }}>
+              <div
+                style={{
+                  width: '40px',
+                  height: '40px',
+                  borderRadius: '50%',
+                  background: '#FEE2E2',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  color: '#DC2626',
+                }}
+              >
+                <Trash2 size={20} />
+              </div>
+              <div>
+                <h3 style={{ fontSize: '18px', fontWeight: 800, color: 'var(--primary-navy)' }}>Delete Lecture</h3>
+                <p style={{ fontSize: '13px', color: 'var(--text-muted)' }}>This action cannot be undone.</p>
+              </div>
+            </div>
+
+            <p style={{ fontSize: '14px', color: 'var(--text-main)', lineHeight: 1.5, marginBottom: '20px' }}>
+              Are you sure you want to delete <strong>"{deleteModalLecture.title}"</strong> and all its associated concepts, questions, checkpoints, and analytics?
+            </p>
+
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
+              <button
+                className="btn btn-secondary btn-sm"
+                onClick={() => setDeleteModalLecture(null)}
+                disabled={deleteDeleting}
+              >
+                Cancel
+              </button>
+              <button
+                className="btn btn-sm"
+                style={{ background: '#DC2626', color: '#FFFFFF', borderColor: '#DC2626' }}
+                onClick={handleConfirmDelete}
+                disabled={deleteDeleting}
+              >
+                {deleteDeleting ? 'Deleting...' : 'Delete Lecture'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

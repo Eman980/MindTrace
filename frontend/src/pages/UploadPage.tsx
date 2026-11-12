@@ -1,5 +1,6 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { api } from '../services/api';
+import type { Lecture } from '../types';
 import {
   UploadCloud,
   FileVideo,
@@ -8,7 +9,6 @@ import {
   AlertCircle,
   Loader2,
   ArrowRight,
-  Sparkles,
   Info
 } from 'lucide-react';
 
@@ -20,7 +20,7 @@ interface UploadPageProps {
 const STAGES = [
   { id: 1, title: 'Uploading recording', desc: 'Securely uploading multimedia file to MindTrace server' },
   { id: 2, title: 'Extracting audio track', desc: 'Validating sample rate and acoustic encoding' },
-  { id: 3, title: 'Transcribing speech locally', desc: 'Running Faster-Whisper on CPU (100% offline, free speech-to-text)' },
+  { id: 3, title: 'Transcribing speech', desc: 'Processing audio and automatically detecting language' },
   { id: 4, title: 'Detecting concept boundaries', desc: 'Identifying cohesive pedagogical concept transitions' },
   { id: 5, title: 'Generating targeted checkpoints', desc: 'Creating concept assessment questions and distractors' },
   { id: 6, title: 'Preparing concept timeline', desc: 'Assembling interactive seek points and progress markers' },
@@ -39,15 +39,48 @@ export const UploadPage: React.FC<UploadPageProps> = ({ setActiveTab, onLectureC
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [title, setTitle] = useState('');
   const [courseCode, setCourseCode] = useState('CS101');
-  const [description, setDescription] = useState('');
-  const [transcriptText, setTranscriptText] = useState('');
-  const [transcriptFile, setTranscriptFile] = useState<File | null>(null);
+  const [existingLectures, setExistingLectures] = useState<Lecture[]>([]);
   
   const [isDragging, setIsDragging] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [currentStage, setCurrentStage] = useState(0);
   const [error, setError] = useState<string | null>(null);
+  const [qualityWarning, setQualityWarning] = useState<string | null>(null);
   const [createdLectureId, setCreatedLectureId] = useState<number | null>(null);
+  const [isDuplicate, setIsDuplicate] = useState(false);
+  const [duplicateLectureData, setDuplicateLectureData] = useState<{
+    id: number;
+    title: string;
+    duration_seconds: number;
+    concepts_count: number;
+    message: string;
+  } | null>(null);
+
+  useEffect(() => {
+    let isMounted = true;
+    api.lectures.list().then((lecs) => {
+      if (isMounted && Array.isArray(lecs)) {
+        setExistingLectures(lecs);
+      }
+    }).catch(() => {
+      // Ignore background fetch error
+    });
+    return () => { isMounted = false; };
+  }, []);
+
+  const handleResetUpload = () => {
+    setUploading(false);
+    setCurrentStage(0);
+    setSelectedFile(null);
+    setTitle('');
+    setCourseCode('CS101');
+    setQualityWarning(null);
+    setIsDuplicate(false);
+    setDuplicateLectureData(null);
+    setError(null);
+    setCreatedLectureId(null);
+    if (fileInputRef.current) fileInputRef.current.value = '';
+  };
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -120,19 +153,29 @@ export const UploadPage: React.FC<UploadPageProps> = ({ setActiveTab, onLectureC
       const formData = new FormData();
       formData.append('title', title.trim());
       formData.append('course_code', courseCode.trim() || 'CS101');
-      formData.append('description', description.trim());
+      formData.append('description', '');
       formData.append('file', selectedFile);
-      if (transcriptText.trim()) {
-        formData.append('transcript_text', transcriptText.trim());
-      }
-      if (transcriptFile) {
-        formData.append('transcript_file', transcriptFile);
-      }
 
       const res = await api.lectures.upload(formData);
+      setQualityWarning(res.quality_warning || null);
       clearInterval(stageTimer);
-      setCurrentStage(7);
-      setCreatedLectureId(res.lecture_id);
+      if (res.is_duplicate) {
+        setIsDuplicate(true);
+        setDuplicateLectureData({
+          id: res.lecture_id,
+          title: res.title,
+          duration_seconds: res.duration_seconds || 0,
+          concepts_count: res.concepts_count || 0,
+          message: res.message || 'This lecture already exists in your library.'
+        });
+        setCreatedLectureId(res.lecture_id);
+        setCurrentStage(7);
+      } else {
+        setIsDuplicate(false);
+        setDuplicateLectureData(null);
+        setCurrentStage(7);
+        setCreatedLectureId(res.lecture_id);
+      }
     } catch (err: any) {
       clearInterval(stageTimer);
       setError(err.message || 'Upload and processing failed.');
@@ -153,6 +196,79 @@ export const UploadPage: React.FC<UploadPageProps> = ({ setActiveTab, onLectureC
       </div>
 
       {uploading ? (
+        isDuplicate && duplicateLectureData ? (
+          <div className="card" style={{ padding: '40px 32px', textAlign: 'center' }}>
+            <div
+              style={{
+                width: '64px',
+                height: '64px',
+                borderRadius: '50%',
+                background: 'var(--accent-soft)',
+                color: 'var(--primary-accent)',
+                display: 'inline-flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                marginBottom: '16px',
+              }}
+            >
+              <Info size={32} />
+            </div>
+
+            <h2 style={{ fontSize: '24px', fontWeight: 800, color: 'var(--primary-navy)', marginBottom: '8px' }}>
+              This lecture already exists in your library.
+            </h2>
+            <p style={{ fontSize: '14px', color: 'var(--text-muted)', maxWidth: '540px', margin: '0 auto 24px', lineHeight: 1.6 }}>
+              MindTrace detected identical file content via cryptographic SHA-256 verification.
+              No redundant records, transcriptions, or quizzes were created, and your existing study progress and MCQ answers remain preserved.
+            </p>
+
+            <div
+              style={{
+                background: 'var(--bg-subtle)',
+                border: '1px solid var(--border-subtle)',
+                borderRadius: 'var(--radius-lg)',
+                padding: '18px 24px',
+                maxWidth: '480px',
+                margin: '0 auto 32px',
+                textAlign: 'left',
+              }}
+            >
+              <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--accent-purple)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+                Existing Lecture In Library
+              </div>
+              <div style={{ fontSize: '17px', fontWeight: 800, color: 'var(--primary-navy)', marginTop: '4px' }}>
+                {duplicateLectureData.title}
+              </div>
+              <div style={{ fontSize: '13px', color: 'var(--text-muted)', marginTop: '6px', display: 'flex', gap: '16px' }}>
+                <span>{duplicateLectureData.concepts_count} Concepts</span>
+                <span>•</span>
+                <span>{Math.floor(duplicateLectureData.duration_seconds / 60)}m {Math.floor(duplicateLectureData.duration_seconds % 60)}s</span>
+                <span>•</span>
+                <span style={{ color: '#16A34A', fontWeight: 600 }}>Ready to Study</span>
+              </div>
+            </div>
+
+            <div style={{ display: 'flex', gap: '12px', justifyContent: 'center', flexWrap: 'wrap' }}>
+              <button
+                id="btn-open-existing-lecture"
+                className="btn btn-primary btn-lg"
+                style={{ display: 'inline-flex', alignItems: 'center', gap: '8px', padding: '12px 24px' }}
+                onClick={() => onLectureCreated(duplicateLectureData.id)}
+              >
+                <span>Open Existing Lecture</span>
+                <ArrowRight size={18} />
+              </button>
+              <button
+                id="btn-upload-different-lecture"
+                className="btn btn-secondary btn-lg"
+                style={{ padding: '12px 24px' }}
+                onClick={handleResetUpload}
+              >
+                <span>Upload Another Lecture</span>
+              </button>
+            </div>
+          </div>
+        ) : (
         <div className="card" style={{ padding: '36px', textAlign: 'center' }}>
           <h2 style={{ fontSize: '22px', fontWeight: 800, color: 'var(--primary-navy)', marginBottom: '8px' }}>
             {currentStage === 7 ? 'Processing Complete!' : 'Processing Lecture Recording'}
@@ -223,6 +339,29 @@ export const UploadPage: React.FC<UploadPageProps> = ({ setActiveTab, onLectureC
             })}
           </div>
 
+          {currentStage === 7 && qualityWarning && (
+            <div
+              style={{
+                padding: '12px 16px',
+                borderRadius: 'var(--radius-md)',
+                background: '#FEF3C7',
+                border: '1px solid #FDE68A',
+                color: '#92400E',
+                fontSize: '13px',
+                fontWeight: 600,
+                marginTop: '20px',
+                marginBottom: '10px',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '8px',
+                textAlign: 'left',
+              }}
+            >
+              <AlertCircle size={18} color="#D97706" style={{ flexShrink: 0 }} />
+              <span>{qualityWarning}</span>
+            </div>
+          )}
+
           {currentStage === 7 && createdLectureId && (
             <button
               id="btn-open-processed-lecture"
@@ -234,6 +373,7 @@ export const UploadPage: React.FC<UploadPageProps> = ({ setActiveTab, onLectureC
             </button>
           )}
         </div>
+        )
       ) : (
         <form onSubmit={handleSubmit} className="card" style={{ padding: '36px' }}>
           {error && (
@@ -351,7 +491,7 @@ export const UploadPage: React.FC<UploadPageProps> = ({ setActiveTab, onLectureC
           </div>
 
           {/* Metadata fields */}
-          <div style={{ display: 'grid', gridTemplateColumns: '3fr 1fr', gap: '16px' }}>
+          <div style={{ display: 'grid', gridTemplateColumns: '3fr 1fr', gap: '16px', marginBottom: '20px' }}>
             <div className="form-group">
               <label className="form-label">Lecture Title *</label>
               <input
@@ -374,79 +514,6 @@ export const UploadPage: React.FC<UploadPageProps> = ({ setActiveTab, onLectureC
                 value={courseCode}
                 onChange={(e) => setCourseCode(e.target.value)}
               />
-            </div>
-          </div>
-
-          <div className="form-group">
-            <label className="form-label">Description / Lecture Topic (Optional)</label>
-            <textarea
-              id="lecture-desc-input"
-              className="form-textarea"
-              rows={2}
-              placeholder="Brief summary of topics covered in this lecture..."
-              value={description}
-              onChange={(e) => setDescription(e.target.value)}
-            />
-          </div>
-
-          {/* Transcript / Subtitles Input */}
-          <div className="form-group" style={{ background: '#F8FAFC', border: '1px solid #E2E8F0', borderRadius: 'var(--radius-md)', padding: '14px' }}>
-            <label className="form-label" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-              <span>Lecture Transcript or Subtitles (Optional)</span>
-              <span style={{ fontSize: '11px', color: 'var(--accent-purple)', fontWeight: 600 }}>Enables Content-Grounded MCQs</span>
-            </label>
-            <p style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '10px' }}>
-              If you have a subtitle file (<strong>.srt, .vtt</strong>) or transcript text notes, provide it here so MindTrace can extract genuine lecture concepts and MCQs without requiring an external speech API.
-            </p>
-            <div style={{ display: 'flex', gap: '10px', alignItems: 'center', marginBottom: '8px' }}>
-              <input
-                type="file"
-                accept=".srt,.vtt,.txt"
-                onChange={(e) => {
-                  if (e.target.files && e.target.files[0]) {
-                    setTranscriptFile(e.target.files[0]);
-                  }
-                }}
-                style={{ fontSize: '12px' }}
-              />
-              {transcriptFile && (
-                <button
-                  type="button"
-                  style={{ background: 'none', border: 'none', color: '#DC2626', fontSize: '11px', cursor: 'pointer' }}
-                  onClick={() => setTranscriptFile(null)}
-                >
-                  Clear file
-                </button>
-              )}
-            </div>
-            <textarea
-              id="lecture-transcript-text-input"
-              className="form-textarea"
-              rows={3}
-              placeholder="Or paste spoken lecture transcript / notes here directly..."
-              value={transcriptText}
-              onChange={(e) => setTranscriptText(e.target.value)}
-              style={{ fontSize: '12px' }}
-            />
-          </div>
-
-          <div
-            style={{
-              background: 'var(--bg-subtle)',
-              border: '1px solid var(--border-subtle)',
-              borderRadius: 'var(--radius-md)',
-              padding: '14px 18px',
-              display: 'flex',
-              alignItems: 'flex-start',
-              gap: '12px',
-              fontSize: '13px',
-              color: 'var(--text-muted)',
-              marginBottom: '24px',
-            }}
-          >
-            <Info size={18} style={{ flexShrink: 0, marginTop: '2px', color: 'var(--accent-purple)' }} />
-            <div>
-              <strong>Academic FYP Pipeline:</strong> The system extracts acoustic data, transcribes speech locally using Faster-Whisper on CPU (100% free, no paid API keys required), partitions the lecture into meaningful concepts, and creates diagnostic checkpoints grounded strictly in spoken content.
             </div>
           </div>
 

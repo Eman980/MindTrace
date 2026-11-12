@@ -611,8 +611,20 @@ export const LedgerPage: React.FC<LedgerPageProps> = ({ onGoToLecture, onReviewC
                                       borderRadius: '4px',
                                       fontSize: '11px',
                                       fontWeight: 700,
-                                      background: att.explanation_verdict === 'valid' ? '#DCFCE7' : '#FEF3C7',
-                                      color: att.explanation_verdict === 'valid' ? '#16A34A' : '#D97706'
+                                      background: (att.explanation_verdict === 'valid' || att.explanation_verdict === 'correct')
+                                        ? '#DCFCE7'
+                                        : att.explanation_verdict === 'partial'
+                                        ? '#FEF3C7'
+                                        : att.explanation_verdict === 'unanswered'
+                                        ? '#F1F5F9'
+                                        : '#FEE2E2',
+                                      color: (att.explanation_verdict === 'valid' || att.explanation_verdict === 'correct')
+                                        ? '#16A34A'
+                                        : att.explanation_verdict === 'partial'
+                                        ? '#D97706'
+                                        : att.explanation_verdict === 'unanswered'
+                                        ? '#475569'
+                                        : '#DC2626'
                                     }}>
                                       LLM Verdict: {att.explanation_verdict}
                                     </span>
@@ -659,7 +671,7 @@ export const LedgerPage: React.FC<LedgerPageProps> = ({ onGoToLecture, onReviewC
                               </div>
                               <div style={{ display: 'flex', alignItems: 'center', gap: '10px', color: 'var(--text-muted)', fontSize: '11px' }}>
                                 <span style={{ fontWeight: 600, color: 'var(--priority-high-text)' }}>
-                                  +{ev.points_added} pts
+                                  +{ev.points_added} severity
                                 </span>
                                 <span>{formatTimestamp(ev.created_at)}</span>
                               </div>
@@ -839,15 +851,15 @@ export const LedgerPage: React.FC<LedgerPageProps> = ({ onGoToLecture, onReviewC
                 <div style={{
                   padding: '14px',
                   borderRadius: 'var(--radius-md)',
-                  background: evalResult.is_correct ? '#DCFCE7' : '#FEE2E2',
-                  border: `1px solid ${evalResult.is_correct ? '#BBF7D0' : '#FECACA'}`,
+                  background: evalResult.is_correct ? '#DCFCE7' : (evalResult.verdict === 'partial' ? '#FEF3C7' : evalResult.verdict === 'unanswered' ? '#F1F5F9' : '#FEE2E2'),
+                  border: `1px solid ${evalResult.is_correct ? '#BBF7D0' : (evalResult.verdict === 'partial' ? '#FDE68A' : evalResult.verdict === 'unanswered' ? '#E2E8F0' : '#FECACA')}`,
                   marginBottom: '16px'
                 }}>
-                  <div style={{ fontWeight: 700, color: evalResult.is_correct ? '#16A34A' : '#DC2626' }}>
-                    {evalResult.is_correct ? 'Probe Passed!' : 'Misconception Persists'}
+                  <div style={{ fontWeight: 700, color: evalResult.is_correct ? '#16A34A' : (evalResult.verdict === 'partial' ? '#D97706' : evalResult.verdict === 'unanswered' ? '#475569' : '#DC2626') }}>
+                    {evalResult.is_correct ? 'Probe Passed!' : (evalResult.verdict === 'partial' ? 'Partially Correct — Needs Clarification' : evalResult.verdict === 'unanswered' ? 'Unanswered / Incomplete Response' : 'Misconception Persists')}
                   </div>
                   <div style={{ fontSize: '12px', marginTop: '4px', color: '#1F2937' }}>
-                    {evalResult.feedback_reason}
+                    {evalResult.feedback || evalResult.feedback_reason}
                   </div>
                   {evalResult.explanation_verdict && (
                     <div style={{ fontSize: '11px', fontWeight: 600, marginTop: '6px', color: '#4B5563' }}>

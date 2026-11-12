@@ -8,7 +8,6 @@ interface AuthContextType {
   loading: boolean;
   login: (email: string, password: string) => Promise<void>;
   signup: (email: string, password: string, fullName: string) => Promise<void>;
-  demoLogin: () => Promise<void>;
   logout: () => void;
 }
 
@@ -49,13 +48,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setUser(res.user);
   };
 
-  const demoLogin = async () => {
-    const res = await api.auth.demoLogin();
-    localStorage.setItem('mindtrace_token', res.access_token);
-    setToken(res.access_token);
-    setUser(res.user);
-  };
-
   const logout = () => {
     localStorage.removeItem('mindtrace_token');
     setToken(null);
@@ -63,7 +55,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   return (
-    <AuthContext.Provider value={{ user, token, loading, login, signup, demoLogin, logout }}>
+    <AuthContext.Provider value={{ user, token, loading, login, signup, logout }}>
       {children}
     </AuthContext.Provider>
   );

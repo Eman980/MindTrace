@@ -1,6 +1,13 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { api } from '../services/api';
-import type { Lecture, Concept, Checkpoint, CheckpointEvaluation } from '../types';
+import type {
+  Lecture,
+  Concept,
+  Checkpoint,
+  CheckpointEvaluation,
+  PrerequisiteRecheck,
+  PrerequisiteRecheckSubmitResult,
+} from '../types';
 import {
   Play,
   Pause,
@@ -24,8 +31,11 @@ import {
   Trophy,
   Award,
   CheckCircle,
-  XCircle
+  XCircle,
+  Edit3,
+  X
 } from 'lucide-react';
+import { McqSourceSection } from '../components/McqSourceSection';
 
 interface PlayerPageProps {
   lectureId: number;
@@ -39,14 +49,11 @@ interface QuestionItem extends Checkpoint {
   conceptEndTime: number;
 }
 
-interface QuestionState {
-  selectedOption: string;
-  shortAnswerText: string;
-  confidenceLevel: number | null;
-  explanationText: string;
-  evaluation: CheckpointEvaluation | null;
-  isAnswered: boolean;
-  isRetrying: boolean;
+interface QuestionResult {
+  selectedAnswer: string;
+  isCorrect?: boolean;
+  evaluation?: CheckpointEvaluation | null;
+  submitted: boolean;
 }
 
 export const PlayerPage: React.FC<PlayerPageProps> = ({
@@ -78,11 +85,169 @@ export const PlayerPage: React.FC<PlayerPageProps> = ({
   const [unresolvedReason, setUnresolvedReason] = useState<string>('');
   const [unresolvedSubmitting, setUnresolvedSubmitting] = useState<boolean>(false);
 
-  // MCQ & Question State
+  // MCQ & Question State (Per-Question Keyed State)
   const [activeQIndex, setActiveQIndex] = useState<number>(0);
-  const [questionStates, setQuestionStates] = useState<Record<number, QuestionState>>({});
+  const [questionResults, setQuestionResults] = useState<Record<number, QuestionResult>>({});
   const [evaluating, setEvaluating] = useState<boolean>(false);
   const [showCompletionSummary, setShowCompletionSummary] = useState<boolean>(false);
+  const [reviewMode, setReviewMode] = useState<boolean>(false);
+  const [reviewIndex, setReviewIndex] = useState<number>(0);
+  const checkpointCardRef = useRef<HTMLDivElement | null>(null);
+
+  // Cross-Topic Prerequisite Re-Check State
+  const [rechecks, setRechecks] = useState<PrerequisiteRecheck[]>([]);
+  const [activeRecheckIndex, setActiveRecheckIndex] = useState<number>(0);
+  const [recheckSkipped, setRecheckSkipped] = useState<boolean>(false);
+  const [recheckAnswers, setRecheckAnswers] = useState<Record<number, {
+    selectedAnswer: string;
+    submitted: boolean;
+    isCorrect?: boolean;
+    result?: PrerequisiteRecheckSubmitResult;
+    submitting?: boolean;
+  }>>({});
+
+  const loadRechecks = async (id: number) => {
+    try {
+      const data = await api.lectures.getRechecks(id);
+      setRechecks(Array.isArray(data) ? data : []);
+      setActiveRecheckIndex(0);
+      setRecheckSkipped(false);
+      setRecheckAnswers({});
+    } catch {
+      setRechecks([]);
+    }
+  };
+
+  const handleSelectRecheckOption = (miscId: number, opt: string) => {
+    if (recheckAnswers[miscId]?.submitted) return;
+    setRecheckAnswers((prev) => ({
+      ...prev,
+      [miscId]: {
+        ...prev[miscId],
+        selectedAnswer: opt,
+        submitted: false,
+      },
+    }));
+  };
+
+  const handleSubmitRecheck = async (item: PrerequisiteRecheck) => {
+    const current = recheckAnswers[item.misconception_id];
+    if (!current?.selectedAnswer || current.submitted || current.submitting || !lecture) return;
+
+    setRecheckAnswers((prev) => ({
+      ...prev,
+      [item.misconception_id]: {
+        ...prev[item.misconception_id],
+        submitting: true,
+      },
+    }));
+
+    try {
+      const res = await api.lectures.submitRecheck(lecture.id, {
+        misconception_id: item.misconception_id,
+        checkpoint_id: item.question.id,
+        student_answer: current.selectedAnswer,
+      });
+
+      setRecheckAnswers((prev) => ({
+        ...prev,
+        [item.misconception_id]: {
+          selectedAnswer: current.selectedAnswer,
+          submitted: true,
+          submitting: false,
+          isCorrect: res.is_correct,
+          result: res,
+        },
+      }));
+    } catch (err: any) {
+      setRecheckAnswers((prev) => ({
+        ...prev,
+        [item.misconception_id]: {
+          ...prev[item.misconception_id],
+          submitting: false,
+        },
+      }));
+    }
+  };
+
+  const handleSkipRecheck = () => {
+    setRecheckSkipped(true);
+  };
+
+  // Rename modal state
+  const [showRenameModal, setShowRenameModal] = useState<boolean>(false);
+  const [newTitle, setNewTitle] = useState<string>('');
+  const [renameSaving, setRenameSaving] = useState<boolean>(false);
+  const [renameError, setRenameError] = useState<string | null>(null);
+
+  const handleOpenRename = () => {
+    if (!lecture) return;
+    setNewTitle(lecture.title);
+    setRenameError(null);
+    setShowRenameModal(true);
+  };
+
+  const handleSaveRename = async () => {
+    if (!lecture || !newTitle.trim()) return;
+    setRenameSaving(true);
+    setRenameError(null);
+    try {
+      await api.lectures.rename(lecture.id, newTitle.trim());
+      setLecture({ ...lecture, title: newTitle.trim() });
+      setShowRenameModal(false);
+    } catch (err: any) {
+      setRenameError(err.message || 'Failed to rename lecture');
+    } finally {
+      setRenameSaving(false);
+    }
+  };
+
+  // Prerequisite edit control state
+  const [isEditingPrereq, setIsEditingPrereq] = useState<boolean>(false);
+  const [selectedPrereqId, setSelectedPrereqId] = useState<string>('');
+  const [availablePrereqs, setAvailablePrereqs] = useState<Lecture[]>([]);
+  const [savingPrereq, setSavingPrereq] = useState<boolean>(false);
+
+  const handleStartEditPrereq = async () => {
+    if (!lecture) return;
+    setSelectedPrereqId(
+      lecture.prerequisite_lecture_id ? String(lecture.prerequisite_lecture_id) : ''
+    );
+    setIsEditingPrereq(true);
+    try {
+      const allLecs = await api.lectures.list();
+      // Exclude current lecture to prevent self-prerequisite selection
+      const filtered = Array.isArray(allLecs)
+        ? allLecs.filter((l) => l.id !== lecture.id)
+        : [];
+      setAvailablePrereqs(filtered);
+    } catch (e) {
+      console.error('Failed to load lecture list for prerequisite selection', e);
+    }
+  };
+
+  const handleSavePrereq = async () => {
+    if (!lecture) return;
+    setSavingPrereq(true);
+    try {
+      const prereqId = selectedPrereqId ? parseInt(selectedPrereqId, 10) : null;
+      const res = await api.lectures.update(lecture.id, {
+        prerequisite_lecture_id: prereqId,
+      });
+      setLecture({
+        ...lecture,
+        prerequisite_lecture_id: res.prerequisite_lecture_id,
+        prerequisite_lecture_title: res.prerequisite_lecture_title,
+      });
+      setIsEditingPrereq(false);
+      // Reload re-checks immediately for this new prerequisite
+      await loadRechecks(lecture.id);
+    } catch (err: any) {
+      alert(`Could not update prerequisite: ${err.message || 'Validation error'}`);
+    } finally {
+      setSavingPrereq(false);
+    }
+  };
 
   const mediaRef = useRef<HTMLVideoElement | HTMLAudioElement | null>(null);
 
@@ -95,6 +260,7 @@ export const PlayerPage: React.FC<PlayerPageProps> = ({
         setDuration(data.duration_seconds);
       }
       initializeQuestionsFromLecture(data);
+      await loadRechecks(lectureId);
     } catch (err: any) {
       setError(err.message || 'Failed to load lecture details.');
     } finally {
@@ -111,8 +277,22 @@ export const PlayerPage: React.FC<PlayerPageProps> = ({
     }
   };
 
+  const sortQuestions = (items: QuestionItem[]): QuestionItem[] => {
+    return [...items].sort((a, b) => {
+      const typeRankA = (a.question_type || 'mcq') === 'mcq' ? 0 : 1;
+      const typeRankB = (b.question_type || 'mcq') === 'mcq' ? 0 : 1;
+      if (typeRankA !== typeRankB) return typeRankA - typeRankB;
+
+      const diffRankA = (a.difficulty || 'easy').toLowerCase() === 'easy' ? 0 : 1;
+      const diffRankB = (b.difficulty || 'easy').toLowerCase() === 'easy' ? 0 : 1;
+      if (diffRankA !== diffRankB) return diffRankA - diffRankB;
+
+      return (a.order_index ?? 0) - (b.order_index ?? 0);
+    });
+  };
+
   const initializeQuestionsFromLecture = (data: Lecture) => {
-    const questions: QuestionItem[] = (data.concepts || []).flatMap((c) =>
+    const rawQuestions: QuestionItem[] = (data.concepts || []).flatMap((c) =>
       (c.checkpoints || []).map((chk) => ({
         ...chk,
         conceptTitle: c.title,
@@ -120,21 +300,25 @@ export const PlayerPage: React.FC<PlayerPageProps> = ({
         conceptEndTime: c.end_time,
       }))
     );
+    const questions = sortQuestions(rawQuestions);
 
-    setQuestionStates((prev) => {
+    setQuestionResults((prev) => {
       const updated = { ...prev };
       questions.forEach((q) => {
-        // If question already answered in backend, restore it unless user is currently retrying locally
-        if (q.latest_attempt && !updated[q.id]?.isRetrying) {
+        // Only mark submitted if question has an existing attempt in DB and no local answer yet
+        if (q.latest_attempt && !updated[q.id]) {
+          const attVerdict = q.latest_attempt.grade || q.latest_attempt.verdict || (q.latest_attempt.explanation_verdict as any) || (q.latest_attempt.is_correct ? 'correct' : 'incorrect');
           updated[q.id] = {
-            selectedOption: q.latest_attempt.student_answer,
-            shortAnswerText: q.question_type === 'short_answer' ? q.latest_attempt.student_answer : '',
-            confidenceLevel: q.latest_attempt.confidence_level ?? null,
-            explanationText: q.latest_attempt.explanation_text ?? '',
+            selectedAnswer: q.latest_attempt.student_answer,
+            isCorrect: q.latest_attempt.is_correct,
+            submitted: true,
             evaluation: {
               checkpoint_id: q.id,
               student_answer: q.latest_attempt.student_answer,
               is_correct: q.latest_attempt.is_correct,
+              verdict: attVerdict,
+              grade: attVerdict,
+              feedback: q.latest_attempt.feedback || q.latest_attempt.feedback_reason,
               confidence: q.latest_attempt.confidence_score ?? 1.0,
               feedback_reason:
                 q.latest_attempt.feedback_reason ||
@@ -154,19 +338,16 @@ export const PlayerPage: React.FC<PlayerPageProps> = ({
               source_excerpt: q.source_excerpt,
               source_timestamp: q.source_timestamp,
               attempts: q.attempts,
+              conceptual_trap: q.target_misconception,
+              correct_mental_model: q.explanation,
             },
-            isAnswered: true,
-            isRetrying: false,
           };
         } else if (!updated[q.id]) {
           updated[q.id] = {
-            selectedOption: '',
-            shortAnswerText: '',
-            confidenceLevel: null,
-            explanationText: '',
+            selectedAnswer: '',
+            isCorrect: undefined,
             evaluation: null,
-            isAnswered: false,
-            isRetrying: false,
+            submitted: false,
           };
         }
       });
@@ -181,6 +362,9 @@ export const PlayerPage: React.FC<PlayerPageProps> = ({
     setCurrentTime(0);
     setIsPlaying(false);
     setShowCompletionSummary(false);
+    setReviewMode(false);
+    setReviewIndex(0);
+    setQuestionResults({});
     setSubtleWarning(null);
     setError(null);
     loadLecture();
@@ -189,18 +373,21 @@ export const PlayerPage: React.FC<PlayerPageProps> = ({
   const concepts = lecture?.concepts || [];
   const activeConcept = concepts[activeConceptIndex] || null;
 
-  // Gather flattened question set across the lecture
-  const allQuestions: QuestionItem[] = concepts.flatMap((c) =>
-    (c.checkpoints || []).map((chk) => ({
-      ...chk,
-      conceptTitle: c.title,
-      conceptStartTime: c.start_time,
-      conceptEndTime: c.end_time,
-    }))
-  );
+  // Gather flattened question set across the lecture: all MCQs first, short-answer questions at the end
+  const allQuestions: QuestionItem[] = useMemo(() => {
+    const raw = concepts.flatMap((c) =>
+      (c.checkpoints || []).map((chk) => ({
+        ...chk,
+        conceptTitle: c.title,
+        conceptStartTime: c.start_time,
+        conceptEndTime: c.end_time,
+      }))
+    );
+    return sortQuestions(raw);
+  }, [concepts]);
 
   const currentQ: QuestionItem | undefined = allQuestions[activeQIndex];
-  const currentQState: QuestionState | undefined = currentQ ? questionStates[currentQ.id] : undefined;
+  const currentResult: QuestionResult | undefined = currentQ ? questionResults[currentQ.id] : undefined;
 
   // Sync active concept during playback without wiping quiz question states!
   useEffect(() => {
@@ -295,6 +482,19 @@ export const PlayerPage: React.FC<PlayerPageProps> = ({
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
+  const handleWatchSourcePart = (timestamp: number) => {
+    handleSeek(timestamp);
+    if (mediaRef.current) {
+      mediaRef.current.currentTime = timestamp;
+      mediaRef.current.play().catch(() => {});
+      setIsPlaying(true);
+    }
+    const playerCard = document.getElementById('media-player-card');
+    if (playerCard) {
+      playerCard.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }
+  };
+
   const handleMarkUnresolved = async () => {
     if (!activeConcept) return;
     setUnresolvedSubmitting(true);
@@ -318,50 +518,36 @@ export const PlayerPage: React.FC<PlayerPageProps> = ({
 
   // MCQ Option selection & answer handling
   const handleSelectOption = (opt: string) => {
-    if (!currentQ) return;
-    setQuestionStates((prev) => ({
+    if (!currentQ || questionResults[currentQ.id]?.submitted) return;
+    setQuestionResults((prev) => ({
       ...prev,
       [currentQ.id]: {
-        ...(prev[currentQ.id] || {
-          shortAnswerText: '',
-          confidenceLevel: null,
-          explanationText: '',
-          evaluation: null,
-          isAnswered: false,
-          isRetrying: false,
-        }),
-        selectedOption: opt,
+        ...(prev[currentQ.id] || { evaluation: null, submitted: false }),
+        selectedAnswer: opt,
       },
     }));
   };
 
-  const handleShortAnswerChange = (val: string) => {
-    if (!currentQ) return;
-    setQuestionStates((prev) => ({
+  const handleTextAnswerChange = (val: string) => {
+    if (!currentQ || questionResults[currentQ.id]?.submitted) return;
+    setQuestionResults((prev) => ({
       ...prev,
       [currentQ.id]: {
-        ...(prev[currentQ.id] || {
-          selectedOption: '',
-          confidenceLevel: null,
-          explanationText: '',
-          evaluation: null,
-          isAnswered: false,
-          isRetrying: false,
-        }),
-        shortAnswerText: val,
+        ...(prev[currentQ.id] || { evaluation: null, submitted: false }),
+        selectedAnswer: val,
       },
     }));
   };
 
-  const handleSubmitAnswer = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!currentQ) return;
+  const handleSubmitAnswer = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    if (!currentQ || evaluating || questionResults[currentQ.id]?.submitted) return;
 
-    const qState = questionStates[currentQ.id];
-    const answer = currentQ.question_type === 'mcq' ? qState?.selectedOption : qState?.shortAnswerText;
+    const res = questionResults[currentQ.id];
+    const answer = res?.selectedAnswer;
 
     if (!answer || !answer.trim()) {
-      alert('Please select an option before submitting.');
+      alert('Please select or type an answer before submitting.');
       return;
     }
 
@@ -370,16 +556,14 @@ export const PlayerPage: React.FC<PlayerPageProps> = ({
       const result = await api.checkpoints.submitAnswer({
         checkpoint_id: currentQ.id,
         student_answer: answer.trim(),
-        confidence_level: qState?.confidenceLevel ?? undefined,
-        explanation_text: qState?.explanationText ?? undefined,
       });
 
-      setQuestionStates((prev) => ({
+      setQuestionResults((prev) => ({
         ...prev,
         [currentQ.id]: {
-          ...(prev[currentQ.id] || {}),
-          selectedOption: currentQ.question_type === 'mcq' ? answer.trim() : '',
-          shortAnswerText: currentQ.question_type === 'short_answer' ? answer.trim() : '',
+          selectedAnswer: answer.trim(),
+          isCorrect: result.is_correct,
+          submitted: true,
           evaluation: {
             ...result,
             correct_answer: result.correct_answer || currentQ.correct_answer,
@@ -388,8 +572,6 @@ export const PlayerPage: React.FC<PlayerPageProps> = ({
             remediation_timestamp:
               result.remediation_timestamp ?? currentQ.source_timestamp ?? currentQ.conceptStartTime,
           },
-          isAnswered: true,
-          isRetrying: false,
         },
       }));
 
@@ -398,7 +580,6 @@ export const PlayerPage: React.FC<PlayerPageProps> = ({
           `Misconception logged in persistent tracking (${result.new_severity_level} priority). Saved in database.`
         );
       }
-      loadLectureSilently();
     } catch (err: any) {
       alert(`Evaluation failed: ${err.message}`);
     } finally {
@@ -407,31 +588,30 @@ export const PlayerPage: React.FC<PlayerPageProps> = ({
   };
 
   const handleTryAgain = (qId: number) => {
-    setQuestionStates((prev) => ({
+    setQuestionResults((prev) => ({
       ...prev,
       [qId]: {
-        ...(prev[qId] || {}),
-        selectedOption: '',
-        shortAnswerText: '',
-        isRetrying: true,
+        selectedAnswer: '',
+        submitted: false,
+        isCorrect: undefined,
+        evaluation: null,
       },
     }));
   };
 
-  const handleCancelRetry = (qId: number) => {
-    setQuestionStates((prev) => ({
-      ...prev,
-      [qId]: {
-        ...(prev[qId] || {}),
-        isRetrying: false,
-      },
-    }));
+  const scrollToCheckpoint = () => {
+    if (checkpointCardRef.current) {
+      checkpointCardRef.current.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
   };
 
   const handlePrevQuestion = () => {
     if (activeQIndex > 0) {
       setActiveQIndex(activeQIndex - 1);
       setShowCompletionSummary(false);
+      setReviewMode(false);
+      setSubtleWarning(null);
+      scrollToCheckpoint();
     }
   };
 
@@ -439,14 +619,21 @@ export const PlayerPage: React.FC<PlayerPageProps> = ({
     if (activeQIndex < allQuestions.length - 1) {
       setActiveQIndex(activeQIndex + 1);
       setShowCompletionSummary(false);
+      setReviewMode(false);
+      setSubtleWarning(null);
+      scrollToCheckpoint();
     } else {
       setShowCompletionSummary(true);
+      scrollToCheckpoint();
     }
   };
 
   const handleJumpToQuestion = (idx: number) => {
     setActiveQIndex(idx);
     setShowCompletionSummary(false);
+    setReviewMode(false);
+    setSubtleWarning(null);
+    scrollToCheckpoint();
   };
 
   const formatTime = (secs: number) => {
@@ -457,13 +644,14 @@ export const PlayerPage: React.FC<PlayerPageProps> = ({
 
   // Completion metrics calculation
   const totalQCount = allQuestions.length;
-  const answeredQuestions = allQuestions.filter((q) => questionStates[q.id]?.isAnswered);
+  const answeredQuestions = allQuestions.filter((q) => questionResults[q.id]?.submitted);
   const correctQuestions = allQuestions.filter(
-    (q) => questionStates[q.id]?.isAnswered && questionStates[q.id]?.evaluation?.is_correct
+    (q) => questionResults[q.id]?.submitted && questionResults[q.id]?.isCorrect
   );
   const incorrectQuestions = allQuestions.filter(
-    (q) => questionStates[q.id]?.isAnswered && !questionStates[q.id]?.evaluation?.is_correct
+    (q) => questionResults[q.id]?.submitted && !questionResults[q.id]?.isCorrect
   );
+  const safeReviewIndex = Math.min(reviewIndex, Math.max(0, incorrectQuestions.length - 1));
 
   const answeredQCount = answeredQuestions.length;
   const correctQCount = correctQuestions.length;
@@ -473,13 +661,13 @@ export const PlayerPage: React.FC<PlayerPageProps> = ({
   // Concepts status breakdown
   const conceptSummaries = concepts.map((c) => {
     const cQuestions = allQuestions.filter((q) => q.concept_id === c.id);
-    const cAnswered = cQuestions.filter((q) => questionStates[q.id]?.isAnswered);
+    const cAnswered = cQuestions.filter((q) => questionResults[q.id]?.submitted);
     const cCorrect = cQuestions.filter(
-      (q) => questionStates[q.id]?.isAnswered && questionStates[q.id]?.evaluation?.is_correct
+      (q) => questionResults[q.id]?.submitted && questionResults[q.id]?.isCorrect
     );
     const isMastered = cQuestions.length > 0 && cCorrect.length === cQuestions.length;
     const hasMistakes = cQuestions.some(
-      (q) => questionStates[q.id]?.isAnswered && !questionStates[q.id]?.evaluation?.is_correct
+      (q) => questionResults[q.id]?.submitted && !questionResults[q.id]?.isCorrect
     );
     return {
       concept: c,
@@ -560,17 +748,118 @@ export const PlayerPage: React.FC<PlayerPageProps> = ({
           `Superficial pattern-matching without checking underlying semantic invariants`,
         ];
 
-  const isCurrentQAnswered = Boolean(currentQState?.isAnswered && !currentQState?.isRetrying);
-  const currentEvaluation = currentQState?.evaluation;
 
   return (
     <div style={{ paddingBottom: '60px' }}>
       {/* Top Breadcrumb & Action bar */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '18px' }}>
-        <button id="btn-back-dashboard" className="btn btn-secondary btn-sm" onClick={onBack}>
-          <ArrowLeft size={14} />
-          <span>Back to Lectures</span>
-        </button>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '18px', flexWrap: 'wrap', gap: '12px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
+          <button id="btn-back-dashboard" className="btn btn-secondary btn-sm" onClick={onBack}>
+            <ArrowLeft size={14} />
+            <span>Back to Lectures</span>
+          </button>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+            <span style={{ fontSize: '16px', fontWeight: 800, color: 'var(--primary-navy)' }}>
+              {lecture.title}
+            </span>
+            <button
+              onClick={handleOpenRename}
+              className="btn btn-secondary btn-sm"
+              style={{ padding: '3px 8px', fontSize: '12px', display: 'inline-flex', alignItems: 'center', gap: '4px' }}
+              title="Rename this lecture"
+            >
+              <Edit3 size={12} color="var(--accent-purple)" />
+              <span>Rename</span>
+            </button>
+
+            {/* Prerequisite Lecture Control */}
+            <div
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '6px',
+                fontSize: '12px',
+                paddingLeft: '8px',
+                borderLeft: '1px solid var(--border-subtle)',
+              }}
+            >
+              <span style={{ color: 'var(--text-muted)', fontWeight: 600 }}>Prerequisite:</span>
+              {!isEditingPrereq ? (
+                <div style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+                  <span
+                    style={{
+                      fontWeight: 700,
+                      color: lecture.prerequisite_lecture_title ? 'var(--primary-navy)' : 'var(--text-muted)',
+                      background: 'var(--bg-subtle)',
+                      padding: '2px 8px',
+                      borderRadius: 'var(--radius-sm)',
+                      border: '1px solid var(--border-subtle)',
+                      maxWidth: '180px',
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                      whiteSpace: 'nowrap',
+                    }}
+                    title={lecture.prerequisite_lecture_title || 'None'}
+                  >
+                    {lecture.prerequisite_lecture_title || 'None'}
+                  </span>
+                  <button
+                    type="button"
+                    className="btn btn-secondary btn-sm"
+                    style={{ padding: '2px 8px', fontSize: '11px', height: '22px' }}
+                    onClick={handleStartEditPrereq}
+                    title="Change prerequisite lecture"
+                  >
+                    <span>Change</span>
+                  </button>
+                </div>
+              ) : (
+                <div style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+                  <select
+                    id="select-change-prerequisite"
+                    value={selectedPrereqId}
+                    disabled={savingPrereq}
+                    onChange={(e) => setSelectedPrereqId(e.target.value)}
+                    style={{
+                      fontSize: '12px',
+                      padding: '2px 6px',
+                      borderRadius: 'var(--radius-sm)',
+                      border: '1px solid var(--accent-purple)',
+                      background: '#FFFFFF',
+                      color: 'var(--primary-navy)',
+                      maxWidth: '180px',
+                    }}
+                  >
+                    <option value="">None</option>
+                    {availablePrereqs.map((l) => (
+                      <option key={l.id} value={l.id}>
+                        {l.title} {l.course_code ? `(${l.course_code})` : ''}
+                      </option>
+                    ))}
+                  </select>
+                  <button
+                    type="button"
+                    className="btn btn-primary btn-sm"
+                    style={{ padding: '2px 8px', fontSize: '11px', height: '22px' }}
+                    disabled={savingPrereq}
+                    onClick={handleSavePrereq}
+                  >
+                    <span>{savingPrereq ? 'Saving...' : 'Save'}</span>
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-secondary btn-sm"
+                    style={{ padding: '2px 6px', fontSize: '11px', height: '22px' }}
+                    disabled={savingPrereq}
+                    onClick={() => setIsEditingPrereq(false)}
+                  >
+                    <span>Cancel</span>
+                  </button>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
           <button className="btn btn-secondary btn-sm" onClick={onNavigateToMisconceptions}>
             <AlertTriangle size={14} color="var(--priority-high-text)" />
@@ -609,11 +898,11 @@ export const PlayerPage: React.FC<PlayerPageProps> = ({
       )}
 
       {/* Main Grid: Player on Left, Checkpoint on Right */}
-      <div style={{ display: 'grid', gridTemplateColumns: '1.25fr 1fr', gap: '24px', alignItems: 'start' }}>
+      <div className="player-layout-grid">
         {/* LEFT AREA: Video/Audio Player, Concept Notes & Summary Cards, Timeline */}
         <div>
           {/* Media Player Card */}
-          <div className="card" style={{ padding: '0', overflow: 'hidden', marginBottom: '20px' }}>
+          <div id="media-player-card" className="card" style={{ padding: '0', overflow: 'hidden', marginBottom: '20px' }}>
             <div style={{ position: 'relative', background: '#000000', minHeight: '280px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
               {lecture.media_type === 'video' ? (
                 <video
@@ -937,290 +1226,692 @@ export const PlayerPage: React.FC<PlayerPageProps> = ({
           </div>
         </div>
 
-        {/* RIGHT AREA: Active Concept, Mark Unresolved, MCQ Workflow & Learning Summary */}
-        <div>
-          {/* Active Concept Details Card */}
-          <div className="card" style={{ marginBottom: '20px' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '12px' }}>
-              <div>
-                <span style={{ fontSize: '11px', fontWeight: 700, color: 'var(--accent-purple)', textTransform: 'uppercase' }}>
-                  Current Concept ({activeConceptIndex + 1} of {concepts.length})
-                </span>
-                <h3 style={{ fontSize: '18px', fontWeight: 800, color: 'var(--primary-navy)', marginTop: '2px' }}>
-                  {activeConcept ? activeConcept.title : 'Loading concept...'}
-                </h3>
-              </div>
-              <span
-                className={`badge ${
-                  activeConcept?.status === 'Mastered'
-                    ? 'badge-resolved'
-                    : activeConcept?.status === 'Needs Attention'
-                    ? 'badge-high'
-                    : 'badge-low'
-                }`}
-              >
-                {activeConcept?.status || 'In Progress'}
-              </span>
+        {/* RIGHT AREA: Concept Checkpoint & Diagnostic Assessment */}
+        <div style={{ flex: '1 1 380px', minWidth: '340px' }}>
+          {/* Top checkpoint toolbar */}
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
+            <div style={{ fontSize: '13px', fontWeight: 800, color: 'var(--primary-navy)' }}>
+              Interactive Diagnostic Assessment
             </div>
-
-            <p style={{ fontSize: '13px', color: 'var(--text-muted)', lineHeight: 1.5, marginBottom: '16px' }}>
-              {activeConcept?.description}
-            </p>
-
-            {/* Unresolved Signal Button */}
-            <div
-              style={{
-                background: 'var(--priority-high-bg)',
-                border: '1px solid var(--priority-high-border)',
-                borderRadius: 'var(--radius-md)',
-                padding: '12px 14px',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'space-between',
-                gap: '10px',
-              }}
-            >
-              <div>
-                <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--priority-high-text)' }}>
-                  Feeling confused by this concept?
-                </div>
-                <div style={{ fontSize: '11px', color: '#991B1B' }}>
-                  Records explicit misconception signal (+3 severity) in persistent database.
-                </div>
-              </div>
+            <div style={{ display: 'flex', gap: '6px' }}>
               <button
-                id="btn-mark-unresolved"
                 type="button"
-                className="btn btn-danger btn-sm"
-                onClick={() => setShowUnresolvedModal(true)}
+                className="btn btn-secondary btn-sm"
+                style={{ fontSize: '11px', padding: '2px 8px', height: '24px' }}
+                onClick={() => {
+                  setReviewMode(false);
+                  setShowCompletionSummary(!showCompletionSummary);
+                }}
               >
-                <HelpCircle size={14} />
-                <span>Mark Unresolved</span>
+                <span>{showCompletionSummary ? 'Return to Quiz' : 'View Summary'}</span>
               </button>
             </div>
           </div>
 
           {/* CHECKPOINT AREA: Toggle between Question View and Completion Summary */}
           {showCompletionSummary ? (
-            /* ==============================================================
-               MCQ Completion & Learning Summary Screen (Section 9)
-               ============================================================== */
-            <div className="card" style={{ border: '2px solid var(--accent-purple)', background: '#FAFAFF' }}>
-              {/* Summary Header */}
-              <div style={{ textAlign: 'center', paddingBottom: '18px', borderBottom: '1px solid #E2E8F0', marginBottom: '20px' }}>
-                <div
-                  style={{
-                    width: '56px',
-                    height: '56px',
-                    borderRadius: '50%',
-                    background: accuracyPct >= 80 && answeredQCount === totalQCount ? '#DCFCE7' : '#EDE9FE',
-                    color: accuracyPct >= 80 && answeredQCount === totalQCount ? '#16A34A' : 'var(--accent-purple)',
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    marginBottom: '12px',
-                  }}
-                >
-                  {accuracyPct >= 80 && answeredQCount === totalQCount ? <Trophy size={28} /> : <Award size={28} />}
-                </div>
-                <h2 style={{ fontSize: '20px', fontWeight: 800, color: 'var(--primary-navy)', margin: 0 }}>
-                  {answeredQCount === totalQCount
-                    ? accuracyPct >= 80
-                      ? 'Checkpoints Mastered!'
-                      : 'All Checkpoints Completed!'
-                    : 'MCQ Assessment Summary'}
-                </h2>
-                <p style={{ fontSize: '13px', color: 'var(--text-muted)', marginTop: '6px' }}>
-                  {answeredQCount === totalQCount
-                    ? `You have answered all ${totalQCount} diagnostic questions for '${lecture.title}'.`
-                    : `Answered ${answeredQCount} of ${totalQCount} questions in this lecture.`}
-                </p>
-              </div>
-
-              {/* Real Metrics Grid */}
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '10px', marginBottom: '20px' }}>
-                <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: '8px', padding: '12px', textAlign: 'center' }}>
-                  <div style={{ fontSize: '22px', fontWeight: 900, color: 'var(--primary-navy)' }}>{totalQCount}</div>
-                  <div style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 600 }}>Total MCQs</div>
-                </div>
-                <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: '8px', padding: '12px', textAlign: 'center' }}>
-                  <div style={{ fontSize: '22px', fontWeight: 900, color: '#16A34A' }}>{correctQCount}</div>
-                  <div style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 600 }}>Correct</div>
-                </div>
-                <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: '8px', padding: '12px', textAlign: 'center' }}>
-                  <div style={{ fontSize: '22px', fontWeight: 900, color: '#DC2626' }}>{incorrectQCount}</div>
-                  <div style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 600 }}>Incorrect</div>
-                </div>
-                <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: '8px', padding: '12px', textAlign: 'center' }}>
-                  <div style={{ fontSize: '22px', fontWeight: 900, color: 'var(--accent-purple)' }}>{accuracyPct}%</div>
-                  <div style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 600 }}>Accuracy</div>
-                </div>
-              </div>
-
-              {/* Concepts Performance Breakdown */}
-              <div style={{ marginBottom: '20px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
-                {masteredConcepts.length > 0 && (
-                  <div style={{ background: '#F0FDF4', border: '1px solid #BBF7D0', borderRadius: '8px', padding: '12px' }}>
-                    <div style={{ fontSize: '12px', fontWeight: 800, color: '#166534', display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '6px' }}>
-                      <CheckCircle size={15} color="#16A34A" />
-                      <span>Concepts Answered Correctly ({masteredConcepts.length})</span>
-                    </div>
-                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
-                      {masteredConcepts.map((cs) => (
-                        <span key={cs.concept.id} style={{ background: '#DCFCE7', color: '#15803D', fontSize: '11px', padding: '3px 8px', borderRadius: '4px', fontWeight: 600 }}>
-                          {cs.concept.title} ({cs.correct}/{cs.total})
-                        </span>
-                      ))}
-                    </div>
+            reviewMode ? (
+              /* ==============================================================
+                 Dedicated Incorrect Answers Review Mode
+                 ============================================================== */
+              <div className="card" style={{ border: '2px solid var(--accent-purple)', background: '#FAFAFF' }}>
+                {/* Header with counter and close button */}
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px', flexWrap: 'wrap', gap: '8px' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    <FileQuestion size={18} color="var(--accent-purple)" />
+                    <h3 style={{ fontSize: '16px', fontWeight: 800, color: 'var(--primary-navy)', margin: 0 }}>
+                      Review Incorrect Answers
+                    </h3>
                   </div>
-                )}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    {incorrectQuestions.length > 0 && (
+                      <span style={{ fontSize: '11px', fontWeight: 700, color: '#DC2626', background: '#FEE2E2', padding: '2px 8px', borderRadius: 'var(--radius-full)' }}>
+                        {safeReviewIndex + 1} of {incorrectQuestions.length}
+                      </span>
+                    )}
+                    <button
+                      type="button"
+                      className="btn btn-secondary btn-sm"
+                      style={{ fontSize: '11px', padding: '2px 8px', height: '24px' }}
+                      onClick={() => setReviewMode(false)}
+                      title="Close review and return to summary"
+                    >
+                      <X size={12} />
+                      <span>Close</span>
+                    </button>
+                  </div>
+                </div>
 
-                {weakConcepts.length > 0 && (
-                  <div style={{ background: '#FFF1F2', border: '1px solid #FECDD3', borderRadius: '8px', padding: '12px' }}>
-                    <div style={{ fontSize: '12px', fontWeight: 800, color: '#9F1239', display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '8px' }}>
-                      <AlertTriangle size={15} color="#E11D48" />
-                      <span>Concepts Needing Revision ({weakConcepts.length})</span>
+                {incorrectQuestions.length === 0 ? (
+                  /* Friendly empty state if 0 incorrect answers */
+                  <div style={{ textAlign: 'center', padding: '28px 16px' }}>
+                    <div
+                      style={{
+                        width: '52px',
+                        height: '52px',
+                        borderRadius: '50%',
+                        background: '#DCFCE7',
+                        color: '#16A34A',
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        marginBottom: '14px',
+                      }}
+                    >
+                      <CheckCircle2 size={28} />
                     </div>
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                      {weakConcepts.map((cs) => (
-                        <div key={cs.concept.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: '#FFFFFF', padding: '6px 10px', borderRadius: '6px', border: '1px solid #FFE4E6' }}>
-                          <span style={{ fontSize: '12px', color: '#881337', fontWeight: 600 }}>
-                            {cs.concept.title}
+                    <h4 style={{ fontSize: '16px', fontWeight: 800, color: 'var(--primary-navy)', margin: '0 0 6px 0' }}>
+                      No incorrect answers
+                    </h4>
+                    <p style={{ fontSize: '13px', color: 'var(--text-muted)', margin: '0 0 16px 0' }}>
+                      Great job! You answered all questions correctly in this lecture.
+                    </p>
+                    <button
+                      type="button"
+                      className="btn btn-secondary btn-sm"
+                      onClick={() => setReviewMode(false)}
+                    >
+                      <span>Return to Summary</span>
+                    </button>
+                  </div>
+                ) : (
+                  /* Single Incorrect Question Review Card */
+                  (() => {
+                    const currentReviewQ = incorrectQuestions[safeReviewIndex];
+                    if (!currentReviewQ) return null;
+                    const qOriginalIdx = allQuestions.findIndex((item) => item.id === currentReviewQ.id);
+                    const qReviewResult = questionResults[currentReviewQ.id];
+                    const qReviewEval = qReviewResult?.evaluation;
+                    const conceptTargetTime =
+                      qReviewEval?.remediation_timestamp ?? currentReviewQ.source_timestamp ?? currentReviewQ.conceptStartTime ?? 0;
+
+                    return (
+                      <div>
+                        {/* Concept & Seek to concept button */}
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 10px', background: '#FFFFFF', borderRadius: '6px', border: '1px solid #E2E8F0', marginBottom: '12px' }}>
+                          <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
+                            Concept: <strong style={{ color: 'var(--primary-navy)' }}>{currentReviewQ.conceptTitle}</strong>
                           </span>
                           <button
                             type="button"
                             className="btn btn-secondary btn-sm"
-                            style={{ fontSize: '11px', padding: '2px 8px', height: '24px' }}
-                            onClick={() => {
-                              jumpToConcept(concepts.findIndex((c) => c.id === cs.concept.id));
-                              setShowCompletionSummary(false);
-                            }}
+                            style={{ fontSize: '11px', padding: '2px 8px', height: '24px', flexShrink: 0 }}
+                            onClick={() => handleReviewConcept(conceptTargetTime)}
+                            title={`Seek lecture video to ${formatTime(conceptTargetTime)}`}
                           >
                             <Play size={10} />
-                            <span>Seek to {formatTime(cs.concept.start_time)}</span>
+                            <span>Seek to concept ({formatTime(conceptTargetTime)})</span>
                           </button>
                         </div>
-                      ))}
-                    </div>
-                  </div>
+
+                        {/* Question Text */}
+                        <div style={{ fontSize: '14px', fontWeight: 700, color: 'var(--primary-navy)', marginBottom: '12px', lineHeight: 1.45 }}>
+                          {qOriginalIdx !== -1 ? `Q${qOriginalIdx + 1}: ` : ''}{currentReviewQ.question_text}
+                        </div>
+
+                        {/* User's Answer (Red) & Correct Answer (Green) */}
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginBottom: '12px' }}>
+                          <div style={{ background: '#FFF1F2', border: '1px solid #FECDD3', borderRadius: '6px', padding: '10px 12px' }}>
+                            <div style={{ fontSize: '11px', fontWeight: 700, color: '#9F1239', textTransform: 'uppercase', marginBottom: '2px' }}>
+                              Your Answer
+                            </div>
+                            <div style={{ fontSize: '13px', fontWeight: 700, color: '#DC2626' }}>
+                              {qReviewResult?.selectedAnswer || qReviewEval?.student_answer || 'No answer recorded'}
+                            </div>
+                          </div>
+
+                          <div style={{ background: '#F0FDF4', border: '1px solid #BBF7D0', borderRadius: '6px', padding: '10px 12px' }}>
+                            <div style={{ fontSize: '11px', fontWeight: 700, color: '#166534', textTransform: 'uppercase', marginBottom: '2px' }}>
+                              Correct Answer
+                            </div>
+                            <div style={{ fontSize: '13px', fontWeight: 700, color: '#16A34A' }}>
+                              {qReviewEval?.correct_answer || currentReviewQ.correct_answer || 'Not specified'}
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Explanation (if data has one) */}
+                        {(qReviewEval?.explanation || qReviewEval?.feedback_reason || currentReviewQ.explanation) && (
+                          <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: '6px', padding: '10px 12px', marginBottom: '12px', fontSize: '12px', color: 'var(--text-main)', lineHeight: 1.5 }}>
+                            <strong style={{ color: 'var(--primary-navy)' }}>Explanation: </strong>
+                            {qReviewEval?.explanation || qReviewEval?.feedback_reason || currentReviewQ.explanation}
+                          </div>
+                        )}
+
+                        {/* Source from Lecture */}
+                        {currentReviewQ.question_type === 'mcq' ? (
+                          <div style={{ marginBottom: '12px' }}>
+                            <McqSourceSection
+                              lectureTitle={lecture?.title || currentReviewQ.lecture_title}
+                              sourceExcerpt={currentReviewQ.source_excerpt || qReviewEval?.source_excerpt}
+                              sourceTimestamp={currentReviewQ.source_timestamp ?? qReviewEval?.source_timestamp}
+                              sourceEndTimestamp={currentReviewQ.source_end_timestamp ?? qReviewEval?.source_end_timestamp}
+                              lectureDuration={duration || lecture?.duration_seconds}
+                              onWatchThisPart={handleWatchSourcePart}
+                            />
+                          </div>
+                        ) : (
+                          (currentReviewQ.source_excerpt || qReviewEval?.source_excerpt) && (
+                            <div style={{ fontSize: '11px', background: '#FFFFFF', padding: '8px 10px', borderRadius: '6px', border: '1px dashed #CBD5E1', color: '#475569', marginBottom: '12px' }}>
+                              <strong>Source Lecture Excerpt: </strong>
+                              <em>"{currentReviewQ.source_excerpt || qReviewEval?.source_excerpt}"</em>
+                            </div>
+                          )
+                        )}
+
+                        {/* Previous / Close / Next Navigation */}
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', paddingTop: '12px', borderTop: '1px solid #E2E8F0', marginTop: '12px' }}>
+                          <button
+                            type="button"
+                            className="btn btn-secondary btn-sm"
+                            disabled={safeReviewIndex === 0}
+                            onClick={() => setReviewIndex((prev) => Math.max(0, prev - 1))}
+                          >
+                            <ChevronLeft size={14} />
+                            <span>Previous</span>
+                          </button>
+
+                          <button
+                            type="button"
+                            className="btn btn-secondary btn-sm"
+                            onClick={() => setReviewMode(false)}
+                          >
+                            <span>Close</span>
+                          </button>
+
+                          <button
+                            type="button"
+                            className="btn btn-secondary btn-sm"
+                            disabled={safeReviewIndex >= incorrectQuestions.length - 1}
+                            onClick={() => setReviewIndex((prev) => Math.min(incorrectQuestions.length - 1, prev + 1))}
+                          >
+                            <span>Next</span>
+                            <ChevronRight size={14} />
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })()
                 )}
               </div>
-
-              {/* Detailed Incorrect Questions Review List */}
-              {incorrectQuestions.length > 0 && (
-                <div style={{ marginBottom: '20px' }}>
-                  <div style={{ fontSize: '13px', fontWeight: 800, color: 'var(--primary-navy)', marginBottom: '8px' }}>
-                    Review Questions with Incorrect Answers ({incorrectQuestions.length})
+            ) : (
+              /* ==============================================================
+                 MCQ Completion & Learning Summary Screen (Section 9)
+                 ============================================================== */
+              <div className="card" style={{ border: '2px solid var(--accent-purple)', background: '#FAFAFF' }}>
+                {/* Summary Header */}
+                <div style={{ textAlign: 'center', paddingBottom: '18px', borderBottom: '1px solid #E2E8F0', marginBottom: '20px' }}>
+                  <div
+                    style={{
+                      width: '56px',
+                      height: '56px',
+                      borderRadius: '50%',
+                      background: accuracyPct >= 80 && answeredQCount === totalQCount ? '#DCFCE7' : '#EDE9FE',
+                      color: accuracyPct >= 80 && answeredQCount === totalQCount ? '#16A34A' : 'var(--accent-purple)',
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      marginBottom: '12px',
+                    }}
+                  >
+                    {accuracyPct >= 80 && answeredQCount === totalQCount ? <Trophy size={28} /> : <Award size={28} />}
                   </div>
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', maxHeight: '220px', overflowY: 'auto' }}>
-                    {incorrectQuestions.map((q) => {
-                      const qIndex = allQuestions.findIndex((item) => item.id === q.id);
-                      const qEval = questionStates[q.id]?.evaluation;
-                      return (
-                        <div key={q.id} style={{ background: '#FFFFFF', border: '1px solid #F1F5F9', borderRadius: '6px', padding: '10px 12px' }}>
-                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '8px' }}>
-                            <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--primary-navy)' }}>
-                              Q{qIndex + 1}: {q.question_text}
-                            </div>
+                  <h2 style={{ fontSize: '20px', fontWeight: 800, color: 'var(--primary-navy)', margin: 0 }}>
+                    {answeredQCount === totalQCount
+                      ? accuracyPct >= 80
+                        ? 'Checkpoints Mastered!'
+                        : 'All Checkpoints Completed!'
+                      : 'MCQ Assessment Summary'}
+                  </h2>
+                  <p style={{ fontSize: '13px', color: 'var(--text-muted)', marginTop: '6px' }}>
+                    {answeredQCount === totalQCount
+                      ? `You have answered all ${totalQCount} diagnostic questions for '${lecture.title}'.`
+                      : `Answered ${answeredQCount} of ${totalQCount} questions in this lecture.`}
+                  </p>
+                </div>
+
+                {/* Real Metrics Grid */}
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '10px', marginBottom: '20px' }}>
+                  <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: '8px', padding: '12px', textAlign: 'center' }}>
+                    <div style={{ fontSize: '22px', fontWeight: 900, color: 'var(--primary-navy)' }}>{totalQCount}</div>
+                    <div style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 600 }}>Total MCQs</div>
+                  </div>
+                  <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: '8px', padding: '12px', textAlign: 'center' }}>
+                    <div style={{ fontSize: '22px', fontWeight: 900, color: '#16A34A' }}>{correctQCount}</div>
+                    <div style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 600 }}>Correct</div>
+                  </div>
+                  <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: '8px', padding: '12px', textAlign: 'center' }}>
+                    <div style={{ fontSize: '22px', fontWeight: 900, color: '#DC2626' }}>{incorrectQCount}</div>
+                    <div style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 600 }}>Incorrect</div>
+                  </div>
+                  <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: '8px', padding: '12px', textAlign: 'center' }}>
+                    <div style={{ fontSize: '22px', fontWeight: 900, color: 'var(--accent-purple)' }}>{accuracyPct}%</div>
+                    <div style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 600 }}>Accuracy</div>
+                  </div>
+                </div>
+
+                {/* Concepts Performance Breakdown */}
+                <div style={{ marginBottom: '20px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                  {masteredConcepts.length > 0 && (
+                    <div style={{ background: '#F0FDF4', border: '1px solid #BBF7D0', borderRadius: '8px', padding: '12px' }}>
+                      <div style={{ fontSize: '12px', fontWeight: 800, color: '#166534', display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '6px' }}>
+                        <CheckCircle size={15} color="#16A34A" />
+                        <span>Concepts Answered Correctly ({masteredConcepts.length})</span>
+                      </div>
+                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+                        {masteredConcepts.map((cs) => (
+                          <span key={cs.concept.id} style={{ background: '#DCFCE7', color: '#15803D', fontSize: '11px', padding: '3px 8px', borderRadius: '4px', fontWeight: 600 }}>
+                            {cs.concept.title} ({cs.correct}/{cs.total})
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {weakConcepts.length > 0 && (
+                    <div style={{ background: '#FFF1F2', border: '1px solid #FECDD3', borderRadius: '8px', padding: '12px' }}>
+                      <div style={{ fontSize: '12px', fontWeight: 800, color: '#9F1239', display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '8px' }}>
+                        <AlertTriangle size={15} color="#E11D48" />
+                        <span>Concepts Needing Revision ({weakConcepts.length})</span>
+                      </div>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                        {weakConcepts.map((cs) => (
+                          <div key={cs.concept.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: '#FFFFFF', padding: '6px 10px', borderRadius: '6px', border: '1px solid #FFE4E6' }}>
+                            <span style={{ fontSize: '12px', color: '#881337', fontWeight: 600 }}>
+                              {cs.concept.title}
+                            </span>
                             <button
                               type="button"
                               className="btn btn-secondary btn-sm"
-                              style={{ fontSize: '11px', padding: '2px 8px', height: '24px', flexShrink: 0 }}
+                              style={{ fontSize: '11px', padding: '2px 8px', height: '24px' }}
                               onClick={() => {
-                                setActiveQIndex(qIndex);
+                                jumpToConcept(concepts.findIndex((c) => c.id === cs.concept.id));
                                 setShowCompletionSummary(false);
                               }}
                             >
-                              <span>Review</span>
-                              <ChevronRight size={12} />
+                              <Play size={10} />
+                              <span>Seek to {formatTime(cs.concept.start_time)}</span>
                             </button>
                           </div>
-                          <div style={{ fontSize: '11px', color: '#DC2626', marginTop: '4px' }}>
-                            <strong>Your Answer:</strong> {questionStates[q.id]?.selectedOption}
-                          </div>
-                          {qEval?.correct_answer && (
-                            <div style={{ fontSize: '11px', color: '#16A34A', marginTop: '2px' }}>
-                              <strong>Correct:</strong> {qEval.correct_answer}
-                            </div>
-                          )}
-                        </div>
-                      );
-                    })}
-                  </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
                 </div>
-              )}
 
-              {/* 5 Distinct Summary Actions */}
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', paddingTop: '14px', borderTop: '1px solid #E2E8F0' }}>
-                <div style={{ display: 'flex', gap: '8px' }}>
-                  {incorrectQuestions.length > 0 && (
+                {/* Detailed Incorrect Questions Review List */}
+                {incorrectQuestions.length > 0 && (
+                  <div style={{ marginBottom: '20px' }}>
+                    <div style={{ fontSize: '13px', fontWeight: 800, color: 'var(--primary-navy)', marginBottom: '8px' }}>
+                      Review Questions with Incorrect Answers ({incorrectQuestions.length})
+                    </div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', maxHeight: '220px', overflowY: 'auto' }}>
+                      {incorrectQuestions.map((q) => {
+                        const qIndex = allQuestions.findIndex((item) => item.id === q.id);
+                        const qRes = questionResults[q.id];
+                        const qEval = qRes?.evaluation;
+                        return (
+                          <div key={q.id} style={{ background: '#FFFFFF', border: '1px solid #F1F5F9', borderRadius: '6px', padding: '10px 12px' }}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '8px' }}>
+                              <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--primary-navy)' }}>
+                                Q{qIndex + 1}: {q.question_text}
+                              </div>
+                              <button
+                                type="button"
+                                className="btn btn-secondary btn-sm"
+                                style={{ fontSize: '11px', padding: '2px 8px', height: '24px', flexShrink: 0 }}
+                                onClick={() => {
+                                  const incIndex = incorrectQuestions.findIndex((item) => item.id === q.id);
+                                  setReviewIndex(incIndex !== -1 ? incIndex : 0);
+                                  setReviewMode(true);
+                                }}
+                              >
+                                <span>Review</span>
+                                <ChevronRight size={12} />
+                              </button>
+                            </div>
+                            <div style={{ fontSize: '11px', color: '#DC2626', marginTop: '4px' }}>
+                              <strong>Your Answer:</strong> {qRes?.selectedAnswer}
+                            </div>
+                            {qEval?.correct_answer && (
+                              <div style={{ fontSize: '11px', color: '#16A34A', marginTop: '2px' }}>
+                                <strong>Correct:</strong> {qEval.correct_answer}
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+
+                {/* 4 Distinct Summary Actions */}
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', paddingTop: '14px', borderTop: '1px solid #E2E8F0' }}>
+                  <div style={{ display: 'flex', gap: '8px' }}>
                     <button
                       type="button"
                       className="btn btn-secondary btn-sm"
                       style={{ flex: 1, fontSize: '12px' }}
                       onClick={() => {
-                        const firstIncorrectIdx = allQuestions.findIndex(
-                          (q) => questionStates[q.id]?.isAnswered && !questionStates[q.id]?.evaluation?.is_correct
-                        );
-                        if (firstIncorrectIdx !== -1) {
-                          setActiveQIndex(firstIncorrectIdx);
-                          setShowCompletionSummary(false);
-                        }
+                        setReviewIndex(0);
+                        setReviewMode(true);
                       }}
                     >
                       <span>Review Incorrect Answers</span>
                     </button>
-                  )}
 
-                  {incorrectQuestions.length > 0 && (
+                    {incorrectQuestions.length > 0 && (
+                      <button
+                        type="button"
+                        className="btn btn-primary btn-sm"
+                        style={{ flex: 1, fontSize: '12px' }}
+                        onClick={() => {
+                          incorrectQuestions.forEach((q) => handleTryAgain(q.id));
+                          const firstIncorrectIdx = allQuestions.findIndex(
+                            (q) => questionResults[q.id]?.submitted && !questionResults[q.id]?.isCorrect
+                          );
+                          if (firstIncorrectIdx !== -1) {
+                            setActiveQIndex(firstIncorrectIdx);
+                          }
+                          setShowCompletionSummary(false);
+                        }}
+                      >
+                        <RefreshCw size={12} />
+                        <span>Retry Incorrect Questions</span>
+                      </button>
+                    )}
+                  </div>
+
+                  <div style={{ display: 'flex', gap: '8px' }}>
                     <button
                       type="button"
-                      className="btn btn-primary btn-sm"
+                      className="btn btn-secondary btn-sm"
                       style={{ flex: 1, fontSize: '12px' }}
                       onClick={() => {
-                        incorrectQuestions.forEach((q) => handleTryAgain(q.id));
-                        const firstIncorrectIdx = allQuestions.findIndex(
-                          (q) => questionStates[q.id]?.isAnswered && !questionStates[q.id]?.evaluation?.is_correct
-                        );
-                        if (firstIncorrectIdx !== -1) {
-                          setActiveQIndex(firstIncorrectIdx);
-                        }
                         setShowCompletionSummary(false);
+                        setReviewMode(false);
                       }}
                     >
-                      <RefreshCw size={12} />
-                      <span>Retry Incorrect Questions</span>
+                      <span>Return to Lecture & Questions</span>
                     </button>
-                  )}
-                </div>
-
-                <div style={{ display: 'flex', gap: '8px' }}>
-                  <button
-                    type="button"
-                    className="btn btn-secondary btn-sm"
-                    style={{ flex: 1, fontSize: '12px' }}
-                    onClick={() => setShowCompletionSummary(false)}
-                  >
-                    <span>Return to Lecture & Questions</span>
-                  </button>
-                  <button
-                    type="button"
-                    className="btn btn-secondary btn-sm"
-                    style={{ flex: 1, fontSize: '12px' }}
-                    onClick={onNavigateToMisconceptions}
-                  >
-                    <AlertTriangle size={12} color="var(--priority-high-text)" />
-                    <span>View Learning Progress</span>
-                  </button>
+                    <button
+                      type="button"
+                      className="btn btn-secondary btn-sm"
+                      style={{ flex: 1, fontSize: '12px' }}
+                      onClick={onNavigateToMisconceptions}
+                    >
+                      <AlertTriangle size={12} color="var(--priority-high-text)" />
+                      <span>View Learning Progress</span>
+                    </button>
+                  </div>
                 </div>
               </div>
-            </div>
+            )
+          ) : !recheckSkipped && rechecks.length > 0 && activeRecheckIndex < rechecks.length ? (
+            /* ==============================================================
+               Prerequisite Cross-Topic Re-Check Card
+               ============================================================== */
+            (() => {
+              const currentRecheck = rechecks[activeRecheckIndex];
+              const qState = recheckAnswers[currentRecheck.misconception_id] || {
+                selectedAnswer: '',
+                submitted: false,
+                submitting: false,
+              };
+              const isSubmitted = Boolean(qState.submitted);
+              const isCorrect = Boolean(qState.isCorrect);
+
+              return (
+                <div
+                  className="card"
+                  style={{
+                    border: '2px solid var(--accent-purple)',
+                    background: '#FFFFFF',
+                    boxShadow: 'var(--shadow-md)',
+                  }}
+                >
+                  {/* Card Header */}
+                  <div
+                    style={{
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      alignItems: 'center',
+                      marginBottom: '14px',
+                      flexWrap: 'wrap',
+                      gap: '8px',
+                    }}
+                  >
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      <span
+                        style={{
+                          fontSize: '11px',
+                          fontWeight: 800,
+                          textTransform: 'uppercase',
+                          background: 'var(--accent-purple)',
+                          color: '#FFFFFF',
+                          padding: '3px 10px',
+                          borderRadius: 'var(--radius-full)',
+                          letterSpacing: '0.5px',
+                        }}
+                      >
+                        Prerequisite Re-Check
+                      </span>
+                      {rechecks.length > 1 && (
+                        <span
+                          style={{
+                            fontSize: '11px',
+                            fontWeight: 700,
+                            color: 'var(--text-muted)',
+                            background: 'var(--bg-subtle)',
+                            padding: '3px 8px',
+                            borderRadius: 'var(--radius-full)',
+                          }}
+                        >
+                          Check {activeRecheckIndex + 1} of {rechecks.length}
+                        </span>
+                      )}
+                    </div>
+
+                    <button
+                      type="button"
+                      className="btn btn-secondary btn-sm"
+                      style={{ fontSize: '12px', padding: '3px 10px' }}
+                      onClick={handleSkipRecheck}
+                      title="Skip re-checking and continue to lecture checkpoints"
+                    >
+                      <span>Skip for now</span>
+                      <ChevronRight size={13} />
+                    </button>
+                  </div>
+
+                  {/* Context Banner */}
+                  <div
+                    style={{
+                      padding: '10px 14px',
+                      background: 'var(--accent-soft)',
+                      borderRadius: 'var(--radius-md)',
+                      marginBottom: '16px',
+                      fontSize: '13px',
+                      color: 'var(--primary-navy)',
+                      lineHeight: 1.45,
+                    }}
+                  >
+                    Before this lecture, let's re-check:{' '}
+                    <strong>{currentRecheck.earlier_concept_name}</strong>{' '}
+                    (from <em>{currentRecheck.earlier_lecture_title}</em>)
+                  </div>
+
+                  {/* Question Prompt */}
+                  <div
+                    style={{
+                      fontSize: '14px',
+                      fontWeight: 700,
+                      color: 'var(--primary-navy)',
+                      marginBottom: '14px',
+                      lineHeight: 1.45,
+                    }}
+                  >
+                    {currentRecheck.question.question_text}
+                  </div>
+
+                  {/* MCQ Options */}
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', marginBottom: '16px' }}>
+                    {currentRecheck.question.options.map((opt, optIdx) => {
+                      const isSelected = qState.selectedAnswer === opt;
+                      return (
+                        <label
+                          key={optIdx}
+                          style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '10px',
+                            padding: '10px 14px',
+                            borderRadius: 'var(--radius-md)',
+                            background: isSelected ? 'var(--accent-soft)' : 'var(--bg-subtle)',
+                            border: `1px solid ${isSelected ? 'var(--accent-purple)' : 'var(--border-subtle)'}`,
+                            fontSize: '13px',
+                            cursor: isSubmitted ? 'default' : 'pointer',
+                            opacity: isSubmitted && !isSelected ? 0.75 : 1,
+                            transition: 'all 0.15s ease',
+                          }}
+                        >
+                          <input
+                            type="radio"
+                            name={`recheck-${currentRecheck.misconception_id}-option`}
+                            value={opt}
+                            checked={isSelected}
+                            disabled={isSubmitted}
+                            onChange={() => handleSelectRecheckOption(currentRecheck.misconception_id, opt)}
+                            style={{ accentColor: 'var(--accent-purple)' }}
+                          />
+                          <span style={{ fontWeight: isSelected ? 700 : 400 }}>{opt}</span>
+                        </label>
+                      );
+                    })}
+                  </div>
+
+                  {/* Submit Button (Shown only before submitting) */}
+                  {!isSubmitted && (
+                    <div style={{ marginBottom: '14px' }}>
+                      <button
+                        type="button"
+                        className="btn btn-primary btn-sm"
+                        style={{ width: '100%', height: '36px', fontSize: '13px' }}
+                        disabled={!qState.selectedAnswer || qState.submitting}
+                        onClick={() => handleSubmitRecheck(currentRecheck)}
+                      >
+                        <Send size={14} />
+                        <span>{qState.submitting ? 'Submitting...' : 'Submit Re-Check'}</span>
+                      </button>
+                    </div>
+                  )}
+
+                  {/* Feedback Banner (Shown after submit) */}
+                  {isSubmitted && (
+                    <div
+                      style={{
+                        padding: '14px 16px',
+                        borderRadius: 'var(--radius-md)',
+                        marginBottom: '16px',
+                        background: isCorrect ? '#F0FDF4' : '#FFF1F2',
+                        border: `1px solid ${isCorrect ? '#BBF7D0' : '#FECDD3'}`,
+                      }}
+                    >
+                      <div
+                        style={{
+                          display: 'flex',
+                          justifyContent: 'space-between',
+                          alignItems: 'center',
+                          marginBottom: '8px',
+                          flexWrap: 'wrap',
+                          gap: '6px',
+                        }}
+                      >
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                          {isCorrect ? (
+                            <CheckCircle2 size={18} color="#16A34A" />
+                          ) : (
+                            <AlertCircle size={18} color="#E11D48" />
+                          )}
+                          <span
+                            style={{
+                              fontSize: '14px',
+                              fontWeight: 800,
+                              color: isCorrect ? '#16A34A' : '#E11D48',
+                            }}
+                          >
+                            {isCorrect
+                              ? 'Correct! Prerequisite Gap Resolved'
+                              : 'Incorrect — Prerequisite Gap Unresolved'}
+                          </span>
+                        </div>
+
+                        <span
+                          style={{
+                            fontSize: '11px',
+                            fontWeight: 700,
+                            background: isCorrect ? '#DCFCE7' : '#FFE4E6',
+                            color: isCorrect ? '#15803D' : '#BE123C',
+                            padding: '2px 8px',
+                            borderRadius: '4px',
+                          }}
+                        >
+                          {isCorrect
+                            ? 'Signal Trail: Cross-topic recheck passed'
+                            : 'Signal Trail: Cross-topic recheck failed (+3 severity recorded)'}
+                        </span>
+                      </div>
+
+                      {/* Explanation */}
+                      {(qState.result?.explanation || currentRecheck.question.explanation) && (
+                        <div
+                          style={{
+                            fontSize: '12px',
+                            color: isCorrect ? '#166534' : '#881337',
+                            lineHeight: 1.45,
+                            marginTop: '8px',
+                          }}
+                        >
+                          <strong>Explanation: </strong>
+                          {qState.result?.explanation || currentRecheck.question.explanation}
+                        </div>
+                      )}
+
+                      {/* Next / Proceed Button */}
+                      <div style={{ marginTop: '14px', display: 'flex', justifyContent: 'flex-end' }}>
+                        {activeRecheckIndex < rechecks.length - 1 ? (
+                          <button
+                            type="button"
+                            className="btn btn-primary btn-sm"
+                            style={{ fontSize: '12px' }}
+                            onClick={() => setActiveRecheckIndex((prev) => prev + 1)}
+                          >
+                            <span>Next Re-Check</span>
+                            <ArrowRight size={13} />
+                          </button>
+                        ) : (
+                          <button
+                            type="button"
+                            className="btn btn-primary btn-sm"
+                            style={{ fontSize: '12px' }}
+                            onClick={() => setRecheckSkipped(true)}
+                          >
+                            <span>Proceed to Checkpoints</span>
+                            <ArrowRight size={13} />
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              );
+            })()
           ) : (
             /* ==============================================================
-               Standard Checkpoint Question / Feedback Card
+               Concept Checkpoint: Professional Single Card Layout
                ============================================================== */
-            <div className="card">
-              {/* Question Header & Navigation Pills */}
+            <div className="card" ref={checkpointCardRef}>
+              {/* Question Header & Role Pill */}
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px', flexWrap: 'wrap', gap: '8px' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                   <FileQuestion size={18} color="var(--accent-purple)" />
@@ -1232,7 +1923,23 @@ export const PlayerPage: React.FC<PlayerPageProps> = ({
                   <span style={{ fontSize: '11px', fontWeight: 700, color: 'var(--accent-purple)', background: 'var(--accent-soft)', padding: '2px 8px', borderRadius: 'var(--radius-full)' }}>
                     Question {activeQIndex + 1} of {allQuestions.length}
                   </span>
-                  {currentQ?.item_family_role && (
+                  {currentQ && (
+                    <span
+                      style={{
+                        fontSize: '11px',
+                        fontWeight: 700,
+                        padding: '2px 8px',
+                        borderRadius: 'var(--radius-full)',
+                        background: currentQ.question_type === 'mcq' ? '#EEF2FF' : '#FEF3C7',
+                        color: currentQ.question_type === 'mcq' ? '#4F46E5' : '#D97706',
+                        border: `1px solid ${currentQ.question_type === 'mcq' ? '#C7D2FE' : '#FDE68A'}`,
+                      }}
+                    >
+                      {currentQ.question_type === 'mcq' ? 'MCQ' : 'Short Answer'}
+                    </span>
+                  )}
+                  {/* Renamed to "Initial Check" instead of "DIAGNOSTIC ORIGINAL" */}
+                  {currentQ && (
                     <span
                       style={{
                         fontSize: '11px',
@@ -1265,7 +1972,7 @@ export const PlayerPage: React.FC<PlayerPageProps> = ({
                         ? 'Near-Transfer Probe'
                         : currentQ.item_family_role === 'variant'
                         ? 'Isomorphic Variant'
-                        : 'Diagnostic Original'}
+                        : 'Initial Check'}
                     </span>
                   )}
                   <button
@@ -1280,14 +1987,17 @@ export const PlayerPage: React.FC<PlayerPageProps> = ({
                 </div>
               </div>
 
-              {/* Question Navigation Pills (Q1, Q2... QN) with Real Saved Status Icons */}
+              {/* Question Navigation Pills (Q1..Qn): grey dot = unanswered, green = correct, amber = partial, red = incorrect, purple = current */}
               {allQuestions.length > 1 && (
                 <div style={{ display: 'flex', gap: '6px', overflowX: 'auto', paddingBottom: '8px', marginBottom: '14px' }}>
                   {allQuestions.map((q, idx) => {
                     const isCurrent = activeQIndex === idx;
-                    const st = questionStates[q.id];
-                    const isAns = Boolean(st?.isAnswered);
-                    const isCorrect = Boolean(st?.evaluation?.is_correct);
+                    const res = questionResults[q.id];
+                    const isSubmitted = Boolean(res?.submitted);
+                    const verdict = res?.evaluation?.verdict || (res?.isCorrect ? 'correct' : 'incorrect');
+                    const isCorrect = isSubmitted && verdict === 'correct';
+                    const isPartial = isSubmitted && verdict === 'partial';
+                    const isUnanswered = isSubmitted && verdict === 'unanswered';
 
                     return (
                       <button
@@ -1301,23 +2011,35 @@ export const PlayerPage: React.FC<PlayerPageProps> = ({
                           fontWeight: isCurrent ? 800 : 600,
                           background: isCurrent
                             ? 'var(--accent-purple)'
-                            : isAns
+                            : isSubmitted
                             ? isCorrect
                               ? '#ECFDF5'
+                              : isPartial
+                              ? '#FFFBEB'
+                              : isUnanswered
+                              ? '#F1F5F9'
                               : '#FFF1F2'
                             : 'var(--bg-subtle)',
                           color: isCurrent
                             ? '#FFFFFF'
-                            : isAns
+                            : isSubmitted
                             ? isCorrect
                               ? '#059669'
+                              : isPartial
+                              ? '#D97706'
+                              : isUnanswered
+                              ? '#475569'
                               : '#E11D48'
                             : 'var(--text-muted)',
                           border: isCurrent
                             ? '1px solid var(--accent-purple)'
-                            : isAns
+                            : isSubmitted
                             ? isCorrect
                               ? '1px solid #A7F3D0'
+                              : isPartial
+                              ? '1px solid #FDE68A'
+                              : isUnanswered
+                              ? '1px solid #CBD5E1'
                               : '1px solid #FECDD3'
                             : '1px solid var(--border-subtle)',
                           cursor: 'pointer',
@@ -1328,9 +2050,13 @@ export const PlayerPage: React.FC<PlayerPageProps> = ({
                           transition: 'all 0.15s ease',
                         }}
                       >
-                        {isAns ? (
+                        {isSubmitted ? (
                           isCorrect ? (
                             <CheckCircle2 size={12} color={isCurrent ? '#FFFFFF' : '#10B981'} />
+                          ) : isPartial ? (
+                            <AlertTriangle size={12} color={isCurrent ? '#FFFFFF' : '#D97706'} />
+                          ) : isUnanswered ? (
+                            <HelpCircle size={12} color={isCurrent ? '#FFFFFF' : '#64748B'} />
                           ) : (
                             <AlertCircle size={12} color={isCurrent ? '#FFFFFF' : '#EF4444'} />
                           )
@@ -1344,7 +2070,7 @@ export const PlayerPage: React.FC<PlayerPageProps> = ({
                 </div>
               )}
 
-              {/* Concept Association Banner */}
+              {/* Associated Concept Banner */}
               {currentQ && (
                 <div style={{ marginBottom: '12px', fontSize: '11px', color: 'var(--text-muted)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                   <span>
@@ -1367,245 +2093,331 @@ export const PlayerPage: React.FC<PlayerPageProps> = ({
                     {currentQ.question_text}
                   </div>
 
-                  {/* ========================================================
-                      STATE 1: Question Already Answered (Restore Saved Result)
-                      ======================================================== */}
-                  {isCurrentQAnswered && currentEvaluation ? (
-                    <div>
-                      {/* Immediate Feedback Banner */}
+                  {/* Options (MCQ) or Textarea (Open-ended): Options are locked when submitted */}
+                  {currentQ.question_type === 'mcq' ? (
+                    <>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', marginBottom: '14px' }}>
+                        {currentQ.options.map((opt, oIdx) => {
+                          const isSelected = currentResult?.selectedAnswer === opt;
+                          const isSubmitted = Boolean(currentResult?.submitted);
+                          return (
+                            <label
+                              key={oIdx}
+                              style={{
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: '10px',
+                                padding: '10px 14px',
+                                borderRadius: 'var(--radius-md)',
+                                background: isSelected ? 'var(--accent-soft)' : 'var(--bg-subtle)',
+                                border: `1px solid ${isSelected ? 'var(--accent-purple)' : 'var(--border-subtle)'}`,
+                                fontSize: '13px',
+                                cursor: isSubmitted ? 'default' : 'pointer',
+                                opacity: isSubmitted && !isSelected ? 0.75 : 1,
+                                transition: 'all 0.15s ease',
+                              }}
+                            >
+                              <input
+                                type="radio"
+                                name={`checkpoint-${currentQ.id}-option`}
+                                value={opt}
+                                checked={isSelected}
+                                disabled={isSubmitted}
+                                onChange={() => handleSelectOption(opt)}
+                                style={{ accentColor: 'var(--accent-purple)' }}
+                              />
+                              <span style={{ fontWeight: isSelected ? 700 : 400 }}>{opt}</span>
+                            </label>
+                          );
+                        })}
+                      </div>
+
+                      {/* Source from Lecture (Expandable Section for MCQs) */}
+                      <div style={{ marginBottom: '16px' }}>
+                        <McqSourceSection
+                          lectureTitle={lecture?.title || currentQ.lecture_title}
+                          sourceExcerpt={currentQ.source_excerpt}
+                          sourceTimestamp={currentQ.source_timestamp}
+                          sourceEndTimestamp={currentQ.source_end_timestamp}
+                          lectureDuration={duration || lecture?.duration_seconds}
+                          onWatchThisPart={handleWatchSourcePart}
+                        />
+                      </div>
+                    </>
+                  ) : (
+                    /* Open-Ended Short Answer Input */
+                    <div className="form-group" style={{ marginBottom: '16px' }}>
+                      <textarea
+                        id="checkpoint-short-answer-input"
+                        className="form-textarea"
+                        rows={3}
+                        placeholder="Type your explanation in 1-2 sentences..."
+                        value={currentResult?.selectedAnswer || ''}
+                        disabled={Boolean(currentResult?.submitted)}
+                        onChange={(e) => handleTextAnswerChange(e.target.value)}
+                      />
+                    </div>
+                  )}
+
+                  {/* Submit Button: Shown ONLY when question is NOT submitted yet */}
+                  {!currentResult?.submitted && (
+                    <div style={{ marginBottom: '18px' }}>
+                      <button
+                        id="btn-submit-checkpoint"
+                        type="button"
+                        className="btn btn-primary btn-sm"
+                        style={{ width: '100%', height: '36px', fontSize: '13px' }}
+                        disabled={evaluating}
+                        onClick={handleSubmitAnswer}
+                      >
+                        <Send size={14} />
+                        <span>{evaluating ? 'Evaluating...' : 'Submit Answer'}</span>
+                      </button>
+                    </div>
+                  )}
+
+                  {/* Feedback Block: INSIDE card, DIRECTLY BELOW options, ONLY when submitted */}
+                  {currentResult?.submitted && currentResult?.evaluation && (() => {
+                    const verdict = currentResult.evaluation?.verdict || (currentResult.isCorrect ? 'correct' : 'incorrect');
+                    const isCorrect = verdict === 'correct';
+                    const isPartial = verdict === 'partial';
+                    const isUnanswered = verdict === 'unanswered';
+
+                    const cardBg = isCorrect ? '#F0FDF4' : isPartial ? '#FFFBEB' : isUnanswered ? '#F8FAFC' : '#FFF1F2';
+                    const cardBorder = isCorrect ? '#BBF7D0' : isPartial ? '#FDE68A' : isUnanswered ? '#E2E8F0' : '#FECDD3';
+                    const textColor = isCorrect ? '#16A34A' : isPartial ? '#D97706' : isUnanswered ? '#475569' : '#E11D48';
+                    const badgeBg = isCorrect ? '#DCFCE7' : isPartial ? '#FEF3C7' : isUnanswered ? '#F1F5F9' : '#FFE4E6';
+                    const badgeColor = isCorrect ? '#15803D' : isPartial ? '#92400E' : isUnanswered ? '#475569' : '#BE123C';
+                    const badgeText = isCorrect
+                      ? '+10 Points • Verified'
+                      : isPartial
+                      ? '0 Points • Needs Clarification'
+                      : isUnanswered
+                      ? '0 Points • Unanswered'
+                      : '0 Points • Incorrect';
+                    const statusText = isCorrect
+                      ? 'Correct Answer!'
+                      : isPartial
+                      ? 'Partially Correct — Needs Clarification'
+                      : isUnanswered
+                      ? 'Unanswered / Incomplete Response'
+                      : 'Incorrect Answer — Misconception Detected';
+                    const feedbackText =
+                      currentResult.evaluation.feedback ||
+                      currentResult.evaluation.feedback_reason ||
+                      currentResult.evaluation.explanation ||
+                      currentQ.explanation;
+
+                    return (
                       <div
                         style={{
                           padding: '16px',
                           borderRadius: 'var(--radius-md)',
-                          marginBottom: '16px',
-                          background: currentEvaluation.is_correct ? '#F0FDF4' : '#FFF1F2',
-                          border: `1px solid ${currentEvaluation.is_correct ? '#BBF7D0' : '#FECDD3'}`,
+                          marginBottom: '18px',
+                          background: cardBg,
+                          border: `1px solid ${cardBorder}`,
                         }}
                       >
-                        {/* Status Header */}
+                        {/* Status line: Incorrect red / Partial amber / Unanswered slate / Correct green */}
                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
                           <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                            {currentEvaluation.is_correct ? (
+                            {isCorrect ? (
                               <CheckCircle2 size={18} color="#16A34A" />
+                            ) : isPartial ? (
+                              <AlertTriangle size={18} color="#D97706" />
+                            ) : isUnanswered ? (
+                              <HelpCircle size={18} color="#64748B" />
                             ) : (
                               <AlertCircle size={18} color="#E11D48" />
                             )}
-                            <span style={{ fontSize: '14px', fontWeight: 800, color: currentEvaluation.is_correct ? '#16A34A' : '#E11D48' }}>
-                              {currentEvaluation.is_correct ? 'Correct Answer!' : 'Incorrect Answer — Misconception Detected'}
+                            <span style={{ fontSize: '14px', fontWeight: 800, color: textColor }}>
+                              {statusText}
                             </span>
                           </div>
                           <span
                             style={{
                               fontSize: '11px',
                               fontWeight: 700,
-                              background: currentEvaluation.is_correct ? '#DCFCE7' : '#FFE4E6',
-                              color: currentEvaluation.is_correct ? '#15803D' : '#BE123C',
+                              background: badgeBg,
+                              color: badgeColor,
                               padding: '2px 8px',
                               borderRadius: '4px',
                             }}
                           >
-                            {currentEvaluation.is_correct
-                              ? '+10 Points • Verified'
-                              : 'Logged in Database'}
+                            {badgeText}
                           </span>
                         </div>
 
-                        {/* Selected vs Correct Comparison */}
-                        <div style={{ background: '#FFFFFF', borderRadius: '6px', padding: '10px 12px', marginBottom: '12px', border: '1px solid #F1F5F9' }}>
+                        {/* Your Answer and Correct Answer */}
+                        <div style={{ background: '#FFFFFF', borderRadius: '6px', padding: '10px 12px', marginBottom: '10px', border: '1px solid #F1F5F9' }}>
                           <div style={{ fontSize: '12px', marginBottom: '4px' }}>
-                            <span style={{ color: 'var(--text-muted)', fontWeight: 600 }}>Your Selected Answer: </span>
-                            <span style={{ fontWeight: 700, color: currentEvaluation.is_correct ? '#16A34A' : '#DC2626' }}>
-                              {currentQState?.selectedOption || currentEvaluation.student_answer}
+                            <span style={{ color: 'var(--text-muted)', fontWeight: 600 }}>Your Answer: </span>
+                            <span style={{ fontWeight: 700, color: isCorrect ? '#16A34A' : isPartial ? '#D97706' : isUnanswered ? '#64748B' : '#DC2626' }}>
+                              {currentResult.selectedAnswer || '(No answer entered)'}
                             </span>
                           </div>
                           <div style={{ fontSize: '12px' }}>
                             <span style={{ color: 'var(--text-muted)', fontWeight: 600 }}>Correct Answer: </span>
                             <span style={{ fontWeight: 700, color: '#16A34A' }}>
-                              {currentEvaluation.correct_answer || currentQ.correct_answer}
+                              {currentResult.evaluation.correct_answer || currentQ.correct_answer || 'Not specified'}
                             </span>
                           </div>
                         </div>
 
-                        {/* Simple Explanation Grounded in Lecture */}
-                        <div style={{ fontSize: '13px', color: currentEvaluation.is_correct ? '#166534' : '#881337', lineHeight: 1.5, marginBottom: '10px' }}>
-                          <strong>Explanation: </strong>
-                          {currentEvaluation.explanation || currentEvaluation.feedback_reason || currentQ.explanation}
-                        </div>
-
-                        {/* Source Evidence Quote */}
-                        {(currentQ.source_excerpt || currentEvaluation.source_excerpt) && (
-                          <div style={{ fontSize: '11px', background: '#FFFFFF', padding: '8px 10px', borderRadius: '6px', border: '1px dashed #CBD5E1', color: '#475569', marginBottom: '12px' }}>
-                            <strong>Source Lecture Excerpt: </strong>
-                            <em>"{currentQ.source_excerpt || currentEvaluation.source_excerpt}"</em>
+                        {/* One-line feedback / Explanation */}
+                        {feedbackText && (
+                          <div style={{ fontSize: '12px', color: isCorrect ? '#166534' : isPartial ? '#78350F' : isUnanswered ? '#334155' : '#881337', lineHeight: 1.45, marginBottom: '12px' }}>
+                            <strong>Feedback: </strong>
+                            <span style={{ display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>
+                              {feedbackText}
+                            </span>
                           </div>
                         )}
 
-                        {/* Deep Conceptual Trap Treatment (if incorrect) */}
-                        {!currentEvaluation.is_correct && (
-                          <div style={{ marginBottom: '12px' }}>
-                            {currentEvaluation.conceptual_trap && (
-                              <div style={{ background: '#FFFFFF', border: '1px solid #FDA4AF', borderRadius: '6px', padding: '10px', marginBottom: '8px', fontSize: '12px', color: '#881337' }}>
-                                <div style={{ fontWeight: 800, color: '#BE123C', textTransform: 'uppercase', fontSize: '10px', marginBottom: '2px' }}>
-                                  Part 1: The Conceptual Trap
-                                </div>
-                                {currentEvaluation.conceptual_trap}
-                              </div>
-                            )}
-                            {currentEvaluation.correct_mental_model && (
-                              <div style={{ background: '#EFF6FF', border: '1px solid #BFDBFE', borderRadius: '6px', padding: '10px', fontSize: '12px', color: '#1E3A8A' }}>
-                                <div style={{ fontWeight: 800, color: '#1D4ED8', textTransform: 'uppercase', fontSize: '10px', marginBottom: '2px' }}>
-                                  Part 2: Authoritative Mental Model
-                                </div>
-                                {currentEvaluation.correct_mental_model}
-                              </div>
-                            )}
-                          </div>
+                      {/* Three collapsible sections, collapsed by default:
+                          1. "Why this is a trap"
+                          2. "Authoritative mental model"
+                          3. "Source lecture excerpt" */}
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginBottom: '14px' }}>
+                        {/* 1. Why this is a trap */}
+                        {(currentResult.evaluation.conceptual_trap || currentQ.target_misconception) && (
+                          <details
+                            style={{
+                              background: '#FFFFFF',
+                              borderRadius: '6px',
+                              border: '1px solid #FECDD3',
+                              padding: '8px 12px',
+                              fontSize: '12px',
+                              color: '#881337',
+                              cursor: 'pointer',
+                            }}
+                          >
+                            <summary style={{ fontWeight: 700, color: '#BE123C', outline: 'none' }}>
+                              Why this is a trap
+                            </summary>
+                            <div style={{ marginTop: '8px', lineHeight: 1.5, color: '#475569', fontSize: '12px' }}>
+                              {currentResult.evaluation.conceptual_trap || currentQ.target_misconception}
+                            </div>
+                          </details>
                         )}
 
-                        {/* Action Buttons inside feedback: Review Concept & Try Again */}
-                        <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginTop: '12px', paddingTop: '10px', borderTop: '1px solid rgba(0,0,0,0.06)' }}>
-                          <button
-                            id="btn-review-this-concept"
-                            type="button"
-                            className="btn btn-secondary btn-sm"
-                            style={{ fontSize: '12px' }}
-                            onClick={() => handleReviewConcept(currentEvaluation.remediation_timestamp ?? currentQ.conceptStartTime)}
+                        {/* 2. Authoritative mental model */}
+                        {(currentResult.evaluation.correct_mental_model || currentQ.explanation) && (
+                          <details
+                            style={{
+                              background: '#FFFFFF',
+                              borderRadius: '6px',
+                              border: '1px solid #BFDBFE',
+                              padding: '8px 12px',
+                              fontSize: '12px',
+                              color: '#1E3A8A',
+                              cursor: 'pointer',
+                            }}
                           >
-                            <RotateCcw size={13} />
-                            <span>Review This Concept</span>
-                          </button>
+                            <summary style={{ fontWeight: 700, color: '#1D4ED8', outline: 'none' }}>
+                              Authoritative mental model
+                            </summary>
+                            <div style={{ marginTop: '8px', lineHeight: 1.5, color: '#334155', fontSize: '12px' }}>
+                              {currentResult.evaluation.correct_mental_model || currentQ.explanation}
+                            </div>
+                          </details>
+                        )}
 
-                          <button
-                            id="btn-try-again-checkpoint"
-                            type="button"
-                            className="btn btn-secondary btn-sm"
-                            style={{ fontSize: '12px' }}
-                            onClick={() => handleTryAgain(currentQ.id)}
-                          >
-                            <RefreshCw size={13} />
-                            <span>Try Again</span>
-                          </button>
-                        </div>
+                        {/* 3. Source from Lecture */}
+                        {currentQ.question_type === 'mcq' ? (
+                          <McqSourceSection
+                            lectureTitle={lecture?.title || currentQ.lecture_title}
+                            sourceExcerpt={currentQ.source_excerpt || currentResult.evaluation.source_excerpt}
+                            sourceTimestamp={currentQ.source_timestamp ?? currentResult.evaluation.source_timestamp}
+                            sourceEndTimestamp={currentQ.source_end_timestamp ?? currentResult.evaluation.source_end_timestamp}
+                            lectureDuration={duration || lecture?.duration_seconds}
+                            onWatchThisPart={handleWatchSourcePart}
+                          />
+                        ) : (
+                          (currentQ.source_excerpt || currentResult.evaluation.source_excerpt) && (
+                            <details
+                              style={{
+                                background: '#FFFFFF',
+                                borderRadius: '6px',
+                                border: '1px solid #E2E8F0',
+                                padding: '8px 12px',
+                                fontSize: '12px',
+                                color: '#334155',
+                                cursor: 'pointer',
+                              }}
+                            >
+                              <summary style={{ fontWeight: 700, color: 'var(--primary-navy)', outline: 'none' }}>
+                                Source lecture excerpt
+                              </summary>
+                              <div style={{ marginTop: '8px', lineHeight: 1.5, color: '#475569', fontStyle: 'italic', fontSize: '12px' }}>
+                                "{currentQ.source_excerpt || currentResult.evaluation.source_excerpt}"
+                              </div>
+                            </details>
+                          )
+                        )}
                       </div>
 
-                      {/* Navigation Buttons */}
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      {/* Action buttons: "Replay Concept", "Mark Unresolved", "Try Again" */}
+                      <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', paddingTop: '10px', borderTop: '1px solid rgba(0,0,0,0.06)' }}>
                         <button
+                          id="btn-replay-this-concept"
                           type="button"
                           className="btn btn-secondary btn-sm"
-                          disabled={activeQIndex === 0}
-                          onClick={handlePrevQuestion}
+                          style={{ fontSize: '12px' }}
+                          onClick={() => handleReviewConcept(currentResult.evaluation?.remediation_timestamp ?? currentQ.conceptStartTime)}
                         >
-                          <ChevronLeft size={14} />
-                          <span>Previous Question</span>
+                          <RotateCcw size={13} />
+                          <span>Replay Concept</span>
                         </button>
 
                         <button
-                          id="btn-next-question"
+                          id="btn-mark-unresolved-checkpoint"
                           type="button"
-                          className="btn btn-primary btn-sm"
-                          onClick={handleNextQuestion}
+                          className="btn btn-secondary btn-sm"
+                          style={{ fontSize: '12px' }}
+                          onClick={() => setShowUnresolvedModal(true)}
                         >
-                          <span>{activeQIndex < allQuestions.length - 1 ? 'Next Question' : 'Finish & View Summary'}</span>
-                          <ArrowRight size={14} />
+                          <HelpCircle size={13} color="var(--priority-high-text)" />
+                          <span>Mark Unresolved</span>
+                        </button>
+
+                        <button
+                          id="btn-try-again-checkpoint"
+                          type="button"
+                          className="btn btn-secondary btn-sm"
+                          style={{ fontSize: '12px', marginLeft: 'auto' }}
+                          onClick={() => handleTryAgain(currentQ.id)}
+                        >
+                          <RefreshCw size={13} />
+                          <span>Try Again</span>
                         </button>
                       </div>
                     </div>
-                  ) : (
-                    /* ========================================================
-                       STATE 2: Unanswered Question Form (or Active Retry)
-                       ======================================================== */
-                    <form onSubmit={handleSubmitAnswer}>
-                      {currentQState?.isRetrying && (
-                        <div style={{ background: '#FEF3C7', border: '1px solid #FDE68A', padding: '8px 12px', borderRadius: '6px', fontSize: '12px', color: '#92400E', marginBottom: '12px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                          <span><strong>Retry Mode:</strong> Submitting will record a new attempt while preserving your previous attempt history.</span>
-                          <button
-                            type="button"
-                            onClick={() => handleCancelRetry(currentQ.id)}
-                            style={{ background: 'none', border: 'none', color: '#B45309', fontSize: '11px', cursor: 'pointer', textDecoration: 'underline' }}
-                          >
-                            Cancel
-                          </button>
-                        </div>
-                      )}
+                  );
+                })()}
 
-                      {/* Multiple Choice Options List */}
-                      {currentQ.question_type === 'mcq' ? (
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', marginBottom: '18px' }}>
-                          {currentQ.options.map((opt, oIdx) => {
-                            const isSelected = currentQState?.selectedOption === opt;
-                            return (
-                              <label
-                                key={oIdx}
-                                style={{
-                                  display: 'flex',
-                                  alignItems: 'center',
-                                  gap: '10px',
-                                  padding: '10px 14px',
-                                  borderRadius: 'var(--radius-md)',
-                                  background: isSelected ? 'var(--accent-soft)' : 'var(--bg-subtle)',
-                                  border: `1px solid ${isSelected ? 'var(--accent-purple)' : 'var(--border-subtle)'}`,
-                                  fontSize: '13px',
-                                  cursor: 'pointer',
-                                  transition: 'all 0.15s ease',
-                                }}
-                              >
-                                <input
-                                  type="radio"
-                                  name={`checkpoint-${currentQ.id}-option`}
-                                  value={opt}
-                                  checked={isSelected}
-                                  onChange={() => handleSelectOption(opt)}
-                                  style={{ accentColor: 'var(--accent-purple)' }}
-                                />
-                                <span>{opt}</span>
-                              </label>
-                            );
-                          })}
-                        </div>
-                      ) : (
-                        /* Short Answer Input */
-                        <div className="form-group" style={{ marginBottom: '18px' }}>
-                          <textarea
-                            id="checkpoint-short-answer-input"
-                            className="form-textarea"
-                            rows={3}
-                            placeholder="Type your explanation in 1-2 sentences..."
-                            value={currentQState?.shortAnswerText || ''}
-                            onChange={(e) => handleShortAnswerChange(e.target.value)}
-                          />
-                        </div>
-                      )}
+                  {/* Navigation Buttons: ALWAYS visible at the bottom of the card */}
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', paddingTop: '14px', borderTop: '1px solid #E2E8F0' }}>
+                    <button
+                      type="button"
+                      className="btn btn-secondary btn-sm"
+                      disabled={activeQIndex === 0}
+                      onClick={handlePrevQuestion}
+                    >
+                      <ChevronLeft size={14} />
+                      <span>Previous Question</span>
+                    </button>
 
-                      {/* Submit & Navigation Bar */}
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                        <button
-                          type="button"
-                          className="btn btn-secondary btn-sm"
-                          disabled={activeQIndex === 0}
-                          onClick={handlePrevQuestion}
-                        >
-                          <ChevronLeft size={14} />
-                          <span>Previous</span>
-                        </button>
-
-                        <button
-                          id="btn-submit-checkpoint"
-                          type="submit"
-                          className="btn btn-primary btn-sm"
-                          disabled={
-                            evaluating ||
-                            (currentQ.question_type === 'mcq'
-                              ? !currentQState?.selectedOption
-                              : !currentQState?.shortAnswerText?.trim())
-                          }
-                        >
-                          <Send size={14} />
-                          <span>{evaluating ? 'Evaluating...' : 'Submit Answer'}</span>
-                        </button>
-                      </div>
-                    </form>
-                  )}
+                    <button
+                      id="btn-next-question"
+                      type="button"
+                      className="btn btn-primary btn-sm"
+                      onClick={handleNextQuestion}
+                    >
+                      <span>{activeQIndex < allQuestions.length - 1 ? 'Next Question' : 'View Summary'}</span>
+                      <ArrowRight size={14} />
+                    </button>
+                  </div>
                 </div>
               ) : (
                 <div style={{ textAlign: 'center', padding: '24px 0', color: 'var(--text-muted)' }}>
@@ -1660,6 +2472,93 @@ export const PlayerPage: React.FC<PlayerPageProps> = ({
                 disabled={unresolvedSubmitting}
               >
                 {unresolvedSubmitting ? 'Recording...' : 'Record Misconception Signal'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {/* Rename Lecture Modal */}
+      {showRenameModal && (
+        <div
+          style={{
+            position: 'fixed',
+            inset: 0,
+            background: 'rgba(11, 19, 43, 0.65)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 1000,
+            padding: '20px',
+            backdropFilter: 'blur(3px)',
+          }}
+          onClick={() => !renameSaving && setShowRenameModal(false)}
+        >
+          <div
+            className="card"
+            style={{ maxWidth: '480px', width: '100%', padding: '24px' }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <Edit3 size={18} color="var(--accent-purple)" />
+                <h3 style={{ fontSize: '18px', fontWeight: 800, color: 'var(--primary-navy)' }}>Rename Lecture</h3>
+              </div>
+              <button
+                onClick={() => setShowRenameModal(false)}
+                disabled={renameSaving}
+                style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--text-muted)' }}
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            {renameError && (
+              <div style={{ padding: '8px 12px', background: '#FEE2E2', color: '#DC2626', borderRadius: 'var(--radius-sm)', fontSize: '13px', marginBottom: '12px' }}>
+                {renameError}
+              </div>
+            )}
+
+            <div style={{ marginBottom: '20px' }}>
+              <label style={{ display: 'block', fontSize: '13px', fontWeight: 700, color: 'var(--text-main)', marginBottom: '6px' }}>
+                Lecture Title
+              </label>
+              <input
+                type="text"
+                value={newTitle}
+                onChange={(e) => setNewTitle(e.target.value)}
+                disabled={renameSaving}
+                placeholder="Enter lecture title..."
+                style={{
+                  width: '100%',
+                  padding: '10px 14px',
+                  borderRadius: 'var(--radius-md)',
+                  border: '1px solid var(--border-strong)',
+                  fontSize: '14px',
+                  fontFamily: 'inherit',
+                  outline: 'none',
+                  boxSizing: 'border-box',
+                }}
+                autoFocus
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') handleSaveRename();
+                }}
+              />
+            </div>
+
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
+              <button
+                className="btn btn-secondary btn-sm"
+                onClick={() => setShowRenameModal(false)}
+                disabled={renameSaving}
+              >
+                Cancel
+              </button>
+              <button
+                className="btn btn-primary btn-sm"
+                onClick={handleSaveRename}
+                disabled={renameSaving || !newTitle.trim()}
+              >
+                {renameSaving ? 'Saving...' : 'Save Title'}
               </button>
             </div>
           </div>

@@ -562,11 +562,84 @@ code, pre {
 }
 
 /* Responsive adjustments */
-@media (max-width: 900px) {
+.nav-mobile-toggle {
+  display: none;
+  background: transparent;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  color: var(--primary-navy);
+  cursor: pointer;
+  padding: 6px 8px;
+  align-items: center;
+  justify-content: center;
+  transition: all var(--transition-fast);
+}
+
+.nav-mobile-toggle:hover {
+  background: var(--bg-subtle);
+}
+
+.nav-mobile-menu {
+  display: none;
+  background: var(--bg-surface);
+  border-top: 1px solid var(--border-subtle);
+  padding: 16px 20px 24px;
+  flex-direction: column;
+  gap: 8px;
+  box-shadow: var(--shadow-md);
+  animation: modalIn 0.15s ease-out;
+}
+
+.nav-mobile-menu .nav-item-btn {
+  width: 100%;
+  justify-content: flex-start;
+  padding: 10px 14px;
+}
+
+.player-layout-grid {
+  display: grid;
+  grid-template-columns: 1.25fr 1fr;
+  gap: 24px;
+  align-items: start;
+}
+
+@media (max-width: 960px) {
+  .nav-desktop {
+    display: none !important;
+  }
+  .nav-auth-desktop {
+    display: none !important;
+  }
+  .nav-mobile-toggle {
+    display: flex;
+  }
+  .nav-mobile-menu.open {
+    display: flex;
+  }
+  .player-layout-grid {
+    grid-template-columns: 1fr;
+  }
   .navbar-inner {
     padding: 0 16px;
   }
-  .nav-links {
-    display: none; /* Can show mobile burger or icons */
+}
+
+@media (max-width: 640px) {
+  .section-header {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+  .metrics-grid {
+    grid-template-columns: 1fr;
+  }
+  .card {
+    padding: 16px;
+  }
+  .navbar-inner {
+    padding: 0 14px;
+    height: 64px;
+  }
+  .brand-title {
+    font-size: 18px;
   }
 }

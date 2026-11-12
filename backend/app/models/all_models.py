@@ -2,7 +2,7 @@ import datetime
 import json
 from typing import List, Optional, Dict, Any
 from sqlalchemy import (
-    Column, Integer, String, Float, Boolean, Text, DateTime, ForeignKey, Index
+    Column, Integer, String, Float, Boolean, Text, DateTime, Date, ForeignKey, Index, UniqueConstraint
 )
 from sqlalchemy.orm import relationship
 from app.database import Base
@@ -42,8 +42,14 @@ class Lecture(Base):
     transcription_status = Column(String(50), default="ready")  # ready, untranscribed, transcribed
     processing_error = Column(Text, nullable=True)
     is_demo = Column(Boolean, default=False)
+    file_hash = Column(String(64), index=True, nullable=True)
+    prerequisite_lecture_id = Column(Integer, ForeignKey("lectures.id", ondelete="SET NULL"), nullable=True, index=True)
     created_at = Column(DateTime(timezone=True), default=utcnow)
     updated_at = Column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+    __table_args__ = (
+        UniqueConstraint("user_id", "file_hash", name="uq_lectures_user_file_hash"),
+    )
 
     user = relationship("User", back_populates="lectures")
     media_file = relationship("MediaFile", uselist=False, back_populates="lecture", cascade="all, delete-orphan")
@@ -63,6 +69,7 @@ class MediaFile(Base):
     file_path = Column(String(500), nullable=False)
     file_size = Column(Integer, default=0)
     mime_type = Column(String(100), nullable=False)
+    file_hash = Column(String(64), index=True, nullable=True)
     created_at = Column(DateTime(timezone=True), default=utcnow)
 
     lecture = relationship("Lecture", back_populates="media_file")
@@ -188,6 +195,9 @@ class Checkpoint(Base):
     target_misconception = Column(Text, nullable=True)
     source_excerpt = Column(Text, nullable=True)
     source_timestamp = Column(Float, nullable=True)
+    source_end_timestamp = Column(Float, nullable=True)
+    difficulty = Column(String(20), default="easy", nullable=True)  # easy | moderate
+    scenario_text = Column(Text, nullable=True)
 
     concept = relationship("Concept", back_populates="checkpoints")
     attempts = relationship("CheckpointAttempt", back_populates="checkpoint", cascade="all, delete-orphan")
@@ -237,6 +247,7 @@ class CheckpointAttempt(Base):
 
     # Full raw LLM output stored for auditability (E2 calibration study)
     raw_llm_eval = Column(Text, nullable=True)
+    grade = Column(String(20), nullable=True)  # correct | partial | incorrect
 
     # Hours elapsed since the user's PREVIOUS attempt on any item in this concept family.
     # Null if this is the first attempt. Used to enforce MIN_DELAY_HOURS for resolution.
@@ -297,10 +308,13 @@ class Misconception(Base):
     severity_level = Column(String(20), default="Medium")  # Low, Medium, High
     occurrence_count = Column(Integer, default=1)
 
-    # ── Old status field (KEPT for backward-compat with existing UI/queries) ─
-    status = Column(String(50), default="Unresolved")   # New, Unresolved, Improving, Resolved
+    # ── Status and Lifecycle fields ──────────────────────────────────────────
+    status = Column(String(50), default="open")   # open, improving, resolved, relapse
+    improving_at = Column(Date, nullable=True)
+    recheck_due = Column(Date, nullable=True)
+    relapse_count = Column(Integer, default=0, nullable=True)
 
-    # ── New parallel evidence_status field (state machine from brief) ────────
+    # ── Parallel evidence_status field (state machine from brief) ───────────
     # Suspected -> Confirmed -> Resolved | Memorized; any new evidence after
     # Resolved sets it to Recurred.
     evidence_status = Column(
@@ -381,3 +395,17 @@ class ConceptProgress(Base):
     __table_args__ = (
         Index("idx_user_concept_progress", "user_id", "concept_id", unique=True),
     )
+
+
+class PasswordResetToken(Base):
+    __tablename__ = "password_reset_tokens"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    token = Column(String(255), unique=True, index=True, nullable=False)
+    expires_at = Column(DateTime(timezone=True), nullable=False)
+    used = Column(Boolean, default=False, nullable=False)
+    created_at = Column(DateTime(timezone=True), default=utcnow)
+
+    user = relationship("User")
+

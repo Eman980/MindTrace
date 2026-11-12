@@ -6,7 +6,7 @@ from sqlalchemy import desc
 
 from app.database import get_db
 from app.models.all_models import (
-    Checkpoint, CheckpointAttempt, Concept, User, ConceptProgress, Misconception
+    Checkpoint, CheckpointAttempt, Concept, User, ConceptProgress, Misconception, Lecture
 )
 from app.schemas.all_schemas import CheckpointAnswerIn, CheckpointEvaluationOut
 from app.services.evaluation_service import evaluation_service
@@ -140,11 +140,17 @@ async def submit_checkpoint_answer(
       - Any new wrong after Resolved → Recurred
     """
     # ── 1. Fetch checkpoint & concept ────────────────────────────────────────
-    checkpoint = db.query(Checkpoint).filter(Checkpoint.id == answer_in.checkpoint_id).first()
+    checkpoint = (
+        db.query(Checkpoint)
+        .join(Concept)
+        .join(Lecture)
+        .filter(Checkpoint.id == answer_in.checkpoint_id, Lecture.user_id == current_user.id)
+        .first()
+    )
     if not checkpoint:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Checkpoint not found.")
 
-    concept = db.query(Concept).filter(Concept.id == checkpoint.concept_id).first()
+    concept = checkpoint.concept
     if not concept:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Associated concept not found.")
 
@@ -158,17 +164,23 @@ async def submit_checkpoint_answer(
         target_misconception=checkpoint.target_misconception,
     )
     is_correct: bool = eval_result["correct"]
+    verdict: str = eval_result.get("verdict", "correct" if is_correct else "incorrect")
+    feedback: str = eval_result.get("feedback") or eval_result.get("reason", "")
 
     # ── 3. Compute hours since previous attempt (for delay enforcement) ───────
     # We do this BEFORE inserting the new attempt so we don't count itself.
     hours_since = _hours_since_last_attempt(db, current_user.id, concept.id)
 
-    # ── 4. Run explanation check (only on correct answers with explanation) ───
+    # ── 4. Run explanation check / save LLM grading verdict ──────────────────
     explanation_verdict = VERDICT_NOT_CHECKED
     verdict_reason = ""
     raw_llm_eval = "{}"
 
-    if is_correct and answer_in.explanation_text:
+    if checkpoint.question_type != "mcq":
+        # Save real short-answer LLM grading verdict into the existing "LLM Verdict" field
+        explanation_verdict = verdict
+        verdict_reason = feedback
+    elif is_correct and answer_in.explanation_text:
         check_result = await explanation_check_service.check(
             question_text=checkpoint.question_text,
             correct_answer=checkpoint.correct_answer,
@@ -198,9 +210,10 @@ async def submit_checkpoint_answer(
         student_answer=answer_in.student_answer,
         is_correct=is_correct,
         confidence_score=eval_result.get("confidence", 1.0),   # system-computed (existing)
-        feedback_reason=eval_result.get("reason", ""),
+        feedback_reason=feedback or eval_result.get("reason", ""),
         detected_misconception_note=eval_result.get("misconception"),
         attempt_number=current_attempt_number,
+        grade=verdict,
         # ── New evidence fields ──────────────────────────────────────────────
         confidence_level=answer_in.confidence_level,
         explanation_text=answer_in.explanation_text,
@@ -218,6 +231,9 @@ async def submit_checkpoint_answer(
     new_severity_level = None
     needs_followup = False
     evidence_status_out: Optional[str] = None
+    mongo_status: Optional[str] = None
+    mongo_recheck_due: Optional[str] = None
+    mongo_misc_id: Optional[str] = None
 
     # Fetch (or create) active misconception for this user + concept
     misconception = (
@@ -225,7 +241,7 @@ async def submit_checkpoint_answer(
         .filter(
             Misconception.user_id == current_user.id,
             Misconception.concept_id == concept.id,
-            Misconception.status != "Resolved",
+            Misconception.status.notin_(["Resolved", "resolved"]),
         )
         .first()
     )
@@ -249,8 +265,49 @@ async def submit_checkpoint_answer(
             evidence_text=evidence_text,
             misconception_title=eval_result.get("misconception") or f"Misconception in {concept.title}",
         )
+        was_improving = (misc.status or "").lower() in ["improving", "resolved", "mastered"]
+        misc.status = "open"
+        if was_improving:
+            misc.relapse_count = (getattr(misc, "relapse_count", 0) or 0) + 1
         misconception_updated = True
         new_severity_level = misc.severity_level
+
+        # MongoDB NoSQL Lifecycle: set status to 'open' (or relapse if previously improving)
+        try:
+            from app.mongo import (
+                create_or_get_misconception,
+                mark_misconception_open,
+                mark_misconception_relapse,
+                record_misconception_attempt,
+            )
+            m_doc = await create_or_get_misconception(
+                student_id=current_user.id,
+                lecture_id=concept.lecture_id,
+                concept=concept.title,
+                original_question=checkpoint.question_text,
+                segment_id=getattr(checkpoint, "remediation_segment_id", None)
+            )
+            if m_doc:
+                doc_status = (m_doc.get("status") or "").lower()
+                if doc_status in ["improving", "resolved"]:
+                    rel_doc = await mark_misconception_relapse(m_doc["id"])
+                    mongo_status = "open"
+                    mongo_misc_id = m_doc["id"]
+                else:
+                    await mark_misconception_open(m_doc["id"])
+                    mongo_status = "open"
+                    mongo_misc_id = m_doc["id"]
+                # Persist attempt record
+                await record_misconception_attempt(
+                    misconception_id=m_doc["id"],
+                    question=checkpoint.question_text,
+                    student_answer=answer_in.student_answer,
+                    is_correct=False,
+                    context_type="initial_checkpoint",
+                    explanation=checkpoint.explanation
+                )
+        except Exception as e:
+            print(f"[MongoDB] Error registering open misconception: {e}")
 
         # Count total wrong evidences for this misconception
         wrong_count = sum(
@@ -291,33 +348,44 @@ async def submit_checkpoint_answer(
             # IMPORTANT: do NOT set memorized_flag here (per brief rule).
             # memorized_flag is set only if the student THEN fails a follow-up.
 
-        # c) Check if resolution criteria are now met
-        if misconception:
-            delay_hrs = settings.effective_delay_hours
-            n_passes, has_delayed = _count_valid_passes(
-                db,
-                current_user.id,
-                concept.id,
-                misconception.intervention_shown_at,
-                delay_hrs,
-            )
-
-            if evaluate_resolution(
-                n_passing_attempts=n_passes,
-                has_delayed_pass=has_delayed,
-                intervention_shown=misconception.intervention_shown_at is not None,
-                n_pass_threshold=settings.N_PASS,
-            ):
-                # All criteria met → mark Resolved
-                misconception.evidence_status = "Resolved"
-                misconception.status = "Resolved"          # keep legacy field in sync
-                misconception.resolved_at = _utcnow()
-                db.commit()
-                db.refresh(misconception)
-                misconception_updated = True
-                new_severity_level = misconception.severity_level
-
+        # c) Misconception lifecycle: Transition to "improving"
+        # Rule: A misconception must NEVER move directly from open to resolved through /answer.
+        # Passing an answer sets status to "improving", improving_at to today, and recheck_due to today + 2 days.
+        if misconception and (misconception.status or "").lower() != "resolved":
+            today = datetime.date.today()
+            misconception.status = "improving"
+            misconception.improving_at = today
+            misconception.recheck_due = today + datetime.timedelta(days=2)
+            db.commit()
+            db.refresh(misconception)
+            misconception_updated = True
+            new_severity_level = misconception.severity_level
             evidence_status_out = misconception.evidence_status
+
+        # MongoDB NoSQL Lifecycle: transition active misconception to 'improving'
+        try:
+            from app.mongo import (
+                get_active_misconception,
+                mark_misconception_improving,
+                record_misconception_attempt,
+            )
+            active_m = await get_active_misconception(student_id=current_user.id, concept=concept.title)
+            if active_m and (active_m.get("status") or "").lower() != "resolved":
+                updated_m = await mark_misconception_improving(active_m["id"])
+                if updated_m:
+                    mongo_status = updated_m.get("status")
+                    mongo_recheck_due = updated_m.get("recheck_due")
+                    mongo_misc_id = updated_m.get("id")
+                await record_misconception_attempt(
+                    misconception_id=active_m["id"],
+                    question=checkpoint.question_text,
+                    student_answer=answer_in.student_answer,
+                    is_correct=True,
+                    context_type="initial_checkpoint",
+                    explanation=checkpoint.explanation
+                )
+        except Exception as e:
+            print(f"[MongoDB] Error transitioning misconception to improving: {e}")
 
     # ── 7. Fetch complete attempts history for this checkpoint ────────────────
     all_attempts_db = db.query(CheckpointAttempt).filter(
@@ -353,8 +421,11 @@ async def submit_checkpoint_answer(
         "checkpoint_id": checkpoint.id,
         "student_answer": answer_in.student_answer,
         "is_correct": is_correct,
+        "verdict": verdict,
+        "feedback": feedback,
+        "grade": verdict,
         "confidence": eval_result.get("confidence", 1.0),
-        "feedback_reason": eval_result.get("reason", ""),
+        "feedback_reason": feedback or eval_result.get("reason", ""),
         "detected_misconception_note": eval_result.get("misconception"),
         "correct_answer": checkpoint.correct_answer,
         "explanation": checkpoint.explanation,
@@ -369,6 +440,10 @@ async def submit_checkpoint_answer(
         "concept_title": concept.title,
         "source_excerpt": checkpoint.source_excerpt,
         "source_timestamp": checkpoint.source_timestamp,
+        "source_start_timestamp": checkpoint.source_timestamp,
+        "source_end_timestamp": getattr(checkpoint, "source_end_timestamp", None),
+        "lecture_id": concept.lecture_id if concept else None,
+        "lecture_title": concept.lecture.title if concept and concept.lecture else None,
         # ── Attempt Sequence & History ───────────────────────────────────────────
         "attempt_id": attempt.id,
         "attempt_number": current_attempt_number,
@@ -379,6 +454,10 @@ async def submit_checkpoint_answer(
         "verdict_reason": verdict_reason,
         "needs_followup": needs_followup,
         "evidence_status": evidence_status_out,
+        # ── Misconception Lifecycle fields (NoSQL / MongoDB) ─────────────────
+        "misconception_status": mongo_status or (misc.status if not is_correct and 'misc' in locals() and misc else (misconception.status if misconception else None)),
+        "recheck_due": mongo_recheck_due or (str(misconception.recheck_due) if misconception and misconception.recheck_due else None),
+        "misconception_id": mongo_misc_id or (str(misc.id) if not is_correct and 'misc' in locals() and misc else (str(misconception.id) if misconception else None)),
     }
 
 @router.get("/{checkpoint_id}/attempts", response_model=list)
@@ -388,7 +467,13 @@ def get_checkpoint_attempts(
     current_user: User = Depends(get_current_user),
 ):
     """Returns all saved attempts by the current user for this checkpoint."""
-    checkpoint = db.query(Checkpoint).filter(Checkpoint.id == checkpoint_id).first()
+    checkpoint = (
+        db.query(Checkpoint)
+        .join(Concept)
+        .join(Lecture)
+        .filter(Checkpoint.id == checkpoint_id, Lecture.user_id == current_user.id)
+        .first()
+    )
     if not checkpoint:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Checkpoint not found.")
 

@@ -43,7 +43,7 @@ class MisconceptionService:
             .filter(
                 Misconception.user_id == user_id,
                 Misconception.concept_id == concept_id,
-                Misconception.status != "Resolved"
+                Misconception.status.notin_(["Resolved", "resolved"])
             )
             .first()
         )
@@ -60,13 +60,14 @@ class MisconceptionService:
                 severity_score=0,
                 severity_level="Low",
                 occurrence_count=1,
-                status="Unresolved",
+                status="open",
                 first_detected=utcnow(),
                 last_detected=utcnow()
             )
             db.add(misconception)
             db.flush()
         else:
+            misconception.status = "open"
             misconception.occurrence_count += 1
             misconception.last_detected = utcnow()
             if misconception_title and (not misconception.title or "Conceptual Confusion" in misconception.title):
@@ -313,18 +314,16 @@ class MisconceptionService:
             return None
             
         if is_correct:
-            if misconception.status in ["New", "Unresolved"]:
-                misconception.status = "Improving"
-                evidence_text = "Review checkpoint answered successfully; understanding is actively improving."
-                points = -2
-            else:
-                misconception.status = "Resolved"
-                evidence_text = "Review checkpoint verified correct; misconception fully resolved."
-                points = -4
+            # Misconception must NEVER move directly to Resolved without passing targeted reassessment
+            misconception.status = "improving"
+            misconception.improving_at = datetime.date.today()
+            misconception.recheck_due = datetime.date.today() + datetime.timedelta(days=2)
+            evidence_text = "Review checkpoint answered successfully; understanding is actively improving. Recheck scheduled."
+            points = -2
                 
             evidence = MisconceptionEvidence(
                 misconception_id=misconception.id,
-                signal_type="checkpoint_resolved",
+                signal_type="checkpoint_improving",
                 evidence_text=evidence_text,
                 points_added=points,
                 created_at=utcnow()
@@ -339,17 +338,20 @@ class MisconceptionService:
             misconception.severity_score = max(0, total_score)
             misconception.severity_level = level if misconception.status != "Resolved" else "Low"
             
-            # Update Concept Progress to Mastered / Improving
+            # Update Concept Progress to Improving
             progress = db.query(ConceptProgress).filter(
                 ConceptProgress.user_id == user_id,
                 ConceptProgress.concept_id == misconception.concept_id
             ).first()
             if progress:
-                progress.understanding_percentage = min(100, progress.understanding_percentage + 35)
-                progress.status = "Resolved" if misconception.status == "Resolved" else "Improving"
+                progress.understanding_percentage = min(100, progress.understanding_percentage + 20)
+                progress.status = "Improving"
                 progress.last_studied = utcnow()
         else:
-            misconception.status = "Unresolved"
+            was_improving = (misconception.status or "").lower() == "improving"
+            misconception.status = "open"
+            if was_improving:
+                misconception.relapse_count = (getattr(misconception, "relapse_count", 0) or 0) + 1
             evidence = MisconceptionEvidence(
                 misconception_id=misconception.id,
                 signal_type="explicit_checkpoint",

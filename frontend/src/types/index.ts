@@ -40,6 +40,9 @@ export interface CheckpointAttemptDetail {
   confidence_level?: number;
   explanation_text?: string;
   explanation_verdict?: string;
+  grade?: 'correct' | 'partial' | 'incorrect' | 'unanswered';
+  verdict?: 'correct' | 'partial' | 'incorrect' | 'unanswered';
+  feedback?: string;
   attempt_number?: number;
   created_at: string;
   correct_answer?: string;
@@ -49,7 +52,11 @@ export interface CheckpointAttemptDetail {
 export interface Checkpoint {
   id: number;
   concept_id: number;
-  question_type: 'mcq' | 'short_answer';
+  lecture_id?: number;
+  lecture_title?: string;
+  question_type: 'mcq' | 'short' | 'short_answer' | 'scenario';
+  difficulty?: 'easy' | 'moderate';
+  scenario_text?: string;
   question_text: string;
   options: string[];
   explanation?: string;
@@ -60,6 +67,8 @@ export interface Checkpoint {
   target_misconception?: string;
   source_excerpt?: string;
   source_timestamp?: number;
+  source_start_timestamp?: number;
+  source_end_timestamp?: number;
   attempts?: CheckpointAttemptDetail[];
   latest_attempt?: CheckpointAttemptDetail | null;
 }
@@ -81,6 +90,10 @@ export interface CheckpointEvaluation {
   points_awarded: number;
   misconception_created_or_updated: boolean;
   new_severity_level?: string;
+  grade?: 'correct' | 'partial' | 'incorrect' | 'unanswered';
+  verdict?: 'correct' | 'partial' | 'incorrect' | 'unanswered';
+  feedback?: string;
+  missing_point?: string;
   explanation_verdict?: string;
   verdict_reason?: string;
   needs_followup?: boolean;
@@ -91,6 +104,10 @@ export interface CheckpointEvaluation {
   attempts?: CheckpointAttemptDetail[];
   source_excerpt?: string;
   source_timestamp?: number;
+  source_start_timestamp?: number;
+  source_end_timestamp?: number;
+  lecture_id?: number;
+  lecture_title?: string;
 }
 
 export interface Concept {
@@ -130,6 +147,8 @@ export interface Lecture {
   status: 'processing' | 'ready' | 'failed';
   processing_error?: string;
   is_demo: boolean;
+  prerequisite_lecture_id?: number | null;
+  prerequisite_lecture_title?: string | null;
   created_at: string;
   concepts_count: number;
   unresolved_count: number;
@@ -157,10 +176,14 @@ export interface Misconception {
   concept_name: string;
   title: string;
   summary?: string;
+  incorrect_understanding?: string;
+  correct_explanation?: string;
+  concept_start_time?: number;
+  concept_end_time?: number;
   severity_score: number;
   severity_level: 'Low' | 'Medium' | 'High';
   occurrence_count: number;
-  status: 'New' | 'Unresolved' | 'Improving' | 'Resolved';
+  status: 'Unresolved' | 'Needs Review' | 'In Progress' | 'Resolved' | string;
   first_detected: string;
   last_detected: string;
   evidence: MisconceptionEvidence[];
@@ -169,6 +192,12 @@ export interface Misconception {
   recurrence_count?: number;
   remediation_segment_id?: number;
   resolved_at?: string;
+  improving_at?: string;
+  recheck_due?: string;
+  relapse_count?: number;
+  root_cause_concept?: string;
+  root_cause_lecture_title?: string;
+  root_cause_lecture_id?: number;
 }
 
 export interface MisconceptionStats {
@@ -234,4 +263,72 @@ export interface MisconceptionLedgerItem extends Misconception {
   remediation_start_time?: number;
   remediation_end_time?: number;
   attempts: LedgerAttempt[];
+}
+
+export interface PrerequisiteRecheckQuestion {
+  id: number;
+  concept_id: number;
+  question_type: string;
+  question_text: string;
+  options: string[];
+  explanation?: string;
+  item_family_role?: string;
+}
+
+export interface PrerequisiteRecheck {
+  misconception_id: number;
+  misconception_title: string;
+  earlier_lecture_id: number;
+  earlier_lecture_title: string;
+  earlier_concept_id: number;
+  earlier_concept_name: string;
+  dependent_concept_name: string;
+  question: PrerequisiteRecheckQuestion;
+}
+
+export interface PrerequisiteRecheckSubmitResult {
+  is_correct: boolean;
+  correct_answer?: string;
+  explanation?: string;
+  new_status: string;
+  new_severity_level: string;
+  new_severity_score: number;
+  message: string;
+}
+
+export interface MisconceptionAttemptHistoryItem {
+  question: string;
+  student_answer: string;
+  correct_answer?: string;
+  is_correct: boolean;
+  context_type: string;
+  explanation?: string;
+  created_at?: string;
+}
+
+export interface MisconceptionDetail {
+  id: number;
+  concept_id: number;
+  concept_name: string;
+  lecture_id: number;
+  lecture_title: string;
+  why_detected: string;
+  original_question: string;
+  student_wrong_answer: string;
+  correct_answer: string;
+  detection_evidence: string;
+  lecture_evidence: string;
+  concept_start_time?: number;
+  concept_end_time?: number;
+  marked_unresolved: boolean;
+  marked_unresolved_reason: string;
+  status: string;
+  severity_level: string;
+  severity_score: number;
+  improving_at?: string;
+  recheck_due?: string;
+  next_reassessment_info?: string;
+  relapse_count: number;
+  resolved_at?: string;
+  assessment_history: MisconceptionAttemptHistoryItem[];
 }

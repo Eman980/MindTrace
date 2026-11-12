@@ -30,7 +30,7 @@ def get_dashboard_stats(db: Session = Depends(get_db), current_user: User = Depe
     high_p = sum(1 for m in all_misc if m.severity_level == "High" and m.status != "Resolved")
     med_p = sum(1 for m in all_misc if m.severity_level == "Medium" and m.status != "Resolved")
     low_p = sum(1 for m in all_misc if m.severity_level == "Low" and m.status != "Resolved")
-    unres = sum(1 for m in all_misc if m.status in ["New", "Unresolved"])
+    unres = sum(1 for m in all_misc if m.status in ["New", "Unresolved", "Needs Review"])
     improving = sum(1 for m in all_misc if m.status == "Improving")
     resolved = sum(1 for m in all_misc if m.status == "Resolved")
     
@@ -49,7 +49,7 @@ def get_dashboard_stats(db: Session = Depends(get_db), current_user: User = Depe
         unresolved_c = db.query(Misconception).filter(
             Misconception.lecture_id == lec.id,
             Misconception.user_id == user_id,
-            Misconception.status == "Unresolved"
+            Misconception.status.in_(["Unresolved", "Needs Review", "New"])
         ).count()
         
         progress_records = db.query(ConceptProgress).join(Concept).filter(

@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { useAuth } from '../context/AuthContext';
 import {
   Brain,
@@ -7,12 +7,12 @@ import {
   Upload,
   AlertTriangle,
   TrendingUp,
-  HelpCircle,
-  Layers,
   LogOut,
   User as UserIcon,
   BookOpen,
-  ArrowRight
+  ArrowRight,
+  Menu,
+  X
 } from 'lucide-react';
 
 interface NavbarProps {
@@ -27,6 +27,12 @@ export const Navbar: React.FC<NavbarProps> = ({
   unresolvedCount = 0,
 }) => {
   const { user, logout } = useAuth();
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+
+  const handleNavigate = (tab: string) => {
+    setActiveTab(tab);
+    setMobileMenuOpen(false);
+  };
 
   return (
     <header className="navbar">
@@ -36,7 +42,7 @@ export const Navbar: React.FC<NavbarProps> = ({
           className="brand-link"
           onClick={(e) => {
             e.preventDefault();
-            setActiveTab(user ? 'dashboard' : 'landing');
+            handleNavigate(user ? 'dashboard' : 'landing');
           }}
         >
           <div className="brand-logo-icon">
@@ -45,16 +51,18 @@ export const Navbar: React.FC<NavbarProps> = ({
           <div>
             <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
               <span className="brand-title">MindTrace</span>
-              <span style={{
-                fontSize: '10px',
-                fontWeight: 700,
-                padding: '2px 6px',
-                borderRadius: '4px',
-                background: 'var(--accent-soft)',
-                color: 'var(--primary-accent)',
-                letterSpacing: '0.04em',
-                textTransform: 'uppercase'
-              }}>
+              <span
+                style={{
+                  fontSize: '10px',
+                  fontWeight: 700,
+                  padding: '2px 6px',
+                  borderRadius: '4px',
+                  background: 'var(--accent-soft)',
+                  color: 'var(--primary-accent)',
+                  letterSpacing: '0.04em',
+                  textTransform: 'uppercase',
+                }}
+              >
                 AI Platform
               </span>
             </div>
@@ -64,14 +72,15 @@ export const Navbar: React.FC<NavbarProps> = ({
           </div>
         </a>
 
+        {/* Desktop Navigation */}
         {user ? (
-          <nav>
+          <nav className="nav-desktop">
             <ul className="nav-links">
               <li>
                 <button
                   id="nav-dashboard-btn"
                   className={`nav-item-btn ${activeTab === 'dashboard' ? 'active' : ''}`}
-                  onClick={() => setActiveTab('dashboard')}
+                  onClick={() => handleNavigate('dashboard')}
                 >
                   <LayoutDashboard size={16} />
                   <span>Dashboard</span>
@@ -81,7 +90,7 @@ export const Navbar: React.FC<NavbarProps> = ({
                 <button
                   id="nav-lectures-btn"
                   className={`nav-item-btn ${activeTab === 'lectures' ? 'active' : ''}`}
-                  onClick={() => setActiveTab('lectures')}
+                  onClick={() => handleNavigate('lectures')}
                 >
                   <Video size={16} />
                   <span>My Lectures</span>
@@ -91,7 +100,7 @@ export const Navbar: React.FC<NavbarProps> = ({
                 <button
                   id="nav-upload-btn"
                   className={`nav-item-btn ${activeTab === 'upload' ? 'active' : ''}`}
-                  onClick={() => setActiveTab('upload')}
+                  onClick={() => handleNavigate('upload')}
                 >
                   <Upload size={16} />
                   <span>Upload</span>
@@ -101,7 +110,7 @@ export const Navbar: React.FC<NavbarProps> = ({
                 <button
                   id="nav-misconceptions-btn"
                   className={`nav-item-btn ${activeTab === 'misconceptions' ? 'active' : ''}`}
-                  onClick={() => setActiveTab('misconceptions')}
+                  onClick={() => handleNavigate('misconceptions')}
                 >
                   <AlertTriangle size={16} />
                   <span>Misconceptions</span>
@@ -125,7 +134,7 @@ export const Navbar: React.FC<NavbarProps> = ({
                 <button
                   id="nav-ledger-btn"
                   className={`nav-item-btn ${activeTab === 'ledger' ? 'active' : ''}`}
-                  onClick={() => setActiveTab('ledger')}
+                  onClick={() => handleNavigate('ledger')}
                   title="Evidence-based Misconception Ledger"
                 >
                   <BookOpen size={16} />
@@ -136,49 +145,31 @@ export const Navbar: React.FC<NavbarProps> = ({
                 <button
                   id="nav-progress-btn"
                   className={`nav-item-btn ${activeTab === 'progress' ? 'active' : ''}`}
-                  onClick={() => setActiveTab('progress')}
+                  onClick={() => handleNavigate('progress')}
                 >
                   <TrendingUp size={16} />
                   <span>Progress</span>
                 </button>
               </li>
-              <li>
-                <button
-                  id="nav-fyp2-btn"
-                  className={`nav-item-btn ${activeTab === 'fyp2' ? 'active' : ''}`}
-                  onClick={() => setActiveTab('fyp2')}
-                  title="Platform Architecture"
-                >
-                  <Layers size={16} />
-                  <span>Architecture</span>
-                </button>
-              </li>
             </ul>
           </nav>
         ) : (
-          <nav>
+          <nav className="nav-desktop">
             <ul className="nav-links">
               <li>
                 <button
                   className={`nav-item-btn ${activeTab === 'landing' ? 'active' : ''}`}
-                  onClick={() => setActiveTab('landing')}
+                  onClick={() => handleNavigate('landing')}
                 >
                   Home
-                </button>
-              </li>
-              <li>
-                <button
-                  className={`nav-item-btn ${activeTab === 'fyp2' ? 'active' : ''}`}
-                  onClick={() => setActiveTab('fyp2')}
-                >
-                  Architecture
                 </button>
               </li>
             </ul>
           </nav>
         )}
 
-        <div className="nav-auth-actions">
+        {/* Desktop Auth Actions */}
+        <div className="nav-auth-actions nav-auth-desktop">
           {user ? (
             <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
               <div
@@ -202,7 +193,7 @@ export const Navbar: React.FC<NavbarProps> = ({
                 className="btn btn-secondary btn-sm"
                 onClick={() => {
                   logout();
-                  setActiveTab('landing');
+                  handleNavigate('landing');
                 }}
                 title="Sign Out"
               >
@@ -215,7 +206,7 @@ export const Navbar: React.FC<NavbarProps> = ({
               <button
                 id="btn-login-modal"
                 className="btn btn-secondary btn-sm"
-                onClick={() => setActiveTab('login')}
+                onClick={() => handleNavigate('login')}
               >
                 Sign In
               </button>
@@ -223,7 +214,7 @@ export const Navbar: React.FC<NavbarProps> = ({
                 id="btn-signup-modal"
                 className="btn btn-primary btn-sm"
                 style={{ display: 'flex', alignItems: 'center', gap: '4px' }}
-                onClick={() => setActiveTab('signup')}
+                onClick={() => handleNavigate('signup')}
               >
                 <span>Get Started</span>
                 <ArrowRight size={14} />
@@ -231,7 +222,148 @@ export const Navbar: React.FC<NavbarProps> = ({
             </div>
           )}
         </div>
+
+        {/* Mobile Hamburger Toggle Button */}
+        <button
+          id="btn-mobile-menu-toggle"
+          className="nav-mobile-toggle"
+          onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
+          title="Toggle Navigation Menu"
+          aria-label="Toggle navigation menu"
+        >
+          {mobileMenuOpen ? <X size={20} /> : <Menu size={20} />}
+        </button>
       </div>
+
+      {/* Mobile Dropdown Menu */}
+      {mobileMenuOpen && (
+        <div className="nav-mobile-menu open">
+          {user ? (
+            <>
+              <div
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '8px',
+                  padding: '8px 12px',
+                  background: 'var(--bg-subtle)',
+                  borderRadius: 'var(--radius-md)',
+                  marginBottom: '6px',
+                }}
+              >
+                <UserIcon size={16} color="var(--primary-accent)" />
+                <span style={{ fontSize: '13px', fontWeight: 700, color: 'var(--navy-800)' }}>
+                  {user.full_name}
+                </span>
+                <span style={{ fontSize: '11px', color: 'var(--text-muted)', marginLeft: 'auto' }}>
+                  {user.email}
+                </span>
+              </div>
+
+              <button
+                className={`nav-item-btn ${activeTab === 'dashboard' ? 'active' : ''}`}
+                onClick={() => handleNavigate('dashboard')}
+              >
+                <LayoutDashboard size={16} />
+                <span>Dashboard</span>
+              </button>
+
+              <button
+                className={`nav-item-btn ${activeTab === 'lectures' ? 'active' : ''}`}
+                onClick={() => handleNavigate('lectures')}
+              >
+                <Video size={16} />
+                <span>My Lectures</span>
+              </button>
+
+              <button
+                className={`nav-item-btn ${activeTab === 'upload' ? 'active' : ''}`}
+                onClick={() => handleNavigate('upload')}
+              >
+                <Upload size={16} />
+                <span>Upload Lecture</span>
+              </button>
+
+              <button
+                className={`nav-item-btn ${activeTab === 'misconceptions' ? 'active' : ''}`}
+                onClick={() => handleNavigate('misconceptions')}
+              >
+                <AlertTriangle size={16} />
+                <span>Misconceptions</span>
+                {unresolvedCount > 0 && (
+                  <span
+                    style={{
+                      background: 'var(--priority-high-bg)',
+                      color: 'var(--priority-high-text)',
+                      fontSize: '11px',
+                      padding: '1px 6px',
+                      borderRadius: '9999px',
+                      fontWeight: 700,
+                      marginLeft: 'auto',
+                    }}
+                  >
+                    {unresolvedCount}
+                  </span>
+                )}
+              </button>
+
+              <button
+                className={`nav-item-btn ${activeTab === 'ledger' ? 'active' : ''}`}
+                onClick={() => handleNavigate('ledger')}
+              >
+                <BookOpen size={16} />
+                <span>Misconception Ledger</span>
+              </button>
+
+              <button
+                className={`nav-item-btn ${activeTab === 'progress' ? 'active' : ''}`}
+                onClick={() => handleNavigate('progress')}
+              >
+                <TrendingUp size={16} />
+                <span>Learning Progress</span>
+              </button>
+
+              <div style={{ height: '1px', background: 'var(--border-subtle)', margin: '8px 0' }} />
+
+              <button
+                className="btn btn-secondary btn-sm"
+                style={{ width: '100%', justifyContent: 'center' }}
+                onClick={() => {
+                  logout();
+                  handleNavigate('landing');
+                }}
+              >
+                <LogOut size={14} />
+                <span>Sign Out</span>
+              </button>
+            </>
+          ) : (
+            <>
+              <button
+                className={`nav-item-btn ${activeTab === 'landing' ? 'active' : ''}`}
+                onClick={() => handleNavigate('landing')}
+              >
+                Home
+              </button>
+              <button
+                className="btn btn-secondary btn-sm"
+                style={{ width: '100%', justifyContent: 'center' }}
+                onClick={() => handleNavigate('login')}
+              >
+                Sign In
+              </button>
+              <button
+                className="btn btn-primary btn-sm"
+                style={{ width: '100%', justifyContent: 'center', display: 'flex', alignItems: 'center', gap: '6px' }}
+                onClick={() => handleNavigate('signup')}
+              >
+                <span>Get Started</span>
+                <ArrowRight size={14} />
+              </button>
+            </>
+          )}
+        </div>
+      )}
     </header>
   );
 };
