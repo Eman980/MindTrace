@@ -1,4 +1,31 @@
 import React, { useState, useEffect, useMemo } from 'react';
+import { normalizeStatus } from '../utils/statusHelpers';
+
+// Expandable text component used in misconception cards
+function ExpandableText({ text, maxLen = 180 }: { text: string; maxLen?: number }) {
+  const [expanded, setExpanded] = useState(false);
+  if (!text) return null;
+  if (text.length <= maxLen) {
+    return <p style={{ fontSize: '14px', color: 'var(--text-muted)', marginTop: '8px' }}>{text}</p>;
+  }
+  return (
+    <p style={{ fontSize: '14px', color: 'var(--text-muted)', marginTop: '8px' }}>
+      {expanded ? text : `${text.slice(0, maxLen)}… `}
+      <button
+        style={{
+          background: 'none',
+          border: 'none',
+          color: 'var(--primary-accent)',
+          cursor: 'pointer',
+          padding: 0,
+        }}
+        onClick={() => setExpanded(!expanded)}
+      >
+        {expanded ? 'Show less' : 'Show more'}
+      </button>
+    </p>
+  );
+}
 import { api } from '../services/api';
 import type { Misconception, MisconceptionDetail } from '../types';
 import {
@@ -35,6 +62,9 @@ export const MisconceptionsPage: React.FC<MisconceptionsPageProps> = ({
   const [misconceptions, setMisconceptions] = useState<Misconception[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
+
+  // Active Tab: current vs past
+  const [activeTabType, setActiveTabType] = useState<'current' | 'past'>('current');
 
   // Filters & Search
   const [searchQuery, setSearchQuery] = useState<string>('');
@@ -119,11 +149,21 @@ export const MisconceptionsPage: React.FC<MisconceptionsPageProps> = ({
     }
   };
 
-  // Client-side live search filtering
+  // Split misconceptions into current and past
+  const currentMisconceptions = useMemo(() => {
+    return misconceptions.filter((m) => !m.is_archived);
+  }, [misconceptions]);
+
+  const pastMisconceptions = useMemo(() => {
+    return misconceptions.filter((m) => !!m.is_archived);
+  }, [misconceptions]);
+
+  // Client-side live search filtering on active tab list
   const filteredMisconceptions = useMemo(() => {
-    if (!searchQuery.trim()) return misconceptions;
+    const baseList = activeTabType === 'current' ? currentMisconceptions : pastMisconceptions;
+    if (!searchQuery.trim()) return baseList;
     const q = searchQuery.toLowerCase();
-    return misconceptions.filter((m) => {
+    return baseList.filter((m) => {
       const matchTitle = m.title?.toLowerCase().includes(q);
       const matchConcept = m.concept_name?.toLowerCase().includes(q);
       const matchLecture = m.lecture_title?.toLowerCase().includes(q);
@@ -132,7 +172,7 @@ export const MisconceptionsPage: React.FC<MisconceptionsPageProps> = ({
       const matchCorrect = m.correct_explanation?.toLowerCase().includes(q);
       return matchTitle || matchConcept || matchLecture || matchSummary || matchIncorrect || matchCorrect;
     });
-  }, [misconceptions, searchQuery]);
+  }, [activeTabType, currentMisconceptions, pastMisconceptions, searchQuery]);
 
   const getStatusBadgeStyle = (status: string) => {
     switch (status) {
@@ -185,7 +225,49 @@ export const MisconceptionsPage: React.FC<MisconceptionsPageProps> = ({
       </div>
 
 
-      {/* Search & Filter Toolbar */}
+      {/* Two Tabs: Current vs Past lectures */}
+      <div style={{ display: 'flex', gap: '10px', marginBottom: '20px' }}>
+        <button
+          id="tab-current-misconceptions"
+          className={`btn ${activeTabType === 'current' ? 'btn-primary' : 'btn-secondary'} btn-sm`}
+          onClick={() => setActiveTabType('current')}
+          style={{ display: 'inline-flex', alignItems: 'center', gap: '8px', padding: '8px 16px', fontWeight: 700 }}
+        >
+          <span>Current</span>
+          <span
+            style={{
+              background: activeTabType === 'current' ? 'rgba(255, 255, 255, 0.25)' : 'var(--bg-subtle)',
+              color: activeTabType === 'current' ? '#FFFFFF' : 'var(--text-main)',
+              borderRadius: '9999px',
+              padding: '2px 8px',
+              fontSize: '11px',
+              fontWeight: 800,
+            }}
+          >
+            {currentMisconceptions.length}
+          </span>
+        </button>
+        <button
+          id="tab-past-misconceptions"
+          className={`btn ${activeTabType === 'past' ? 'btn-primary' : 'btn-secondary'} btn-sm`}
+          onClick={() => setActiveTabType('past')}
+          style={{ display: 'inline-flex', alignItems: 'center', gap: '8px', padding: '8px 16px', fontWeight: 700 }}
+        >
+          <span>Past lectures</span>
+          <span
+            style={{
+              background: activeTabType === 'past' ? 'rgba(255, 255, 255, 0.25)' : 'var(--bg-subtle)',
+              color: activeTabType === 'past' ? '#FFFFFF' : 'var(--text-main)',
+              borderRadius: '9999px',
+              padding: '2px 8px',
+              fontSize: '11px',
+              fontWeight: 800,
+            }}
+          >
+            {pastMisconceptions.length}
+          </span>
+        </button>
+      </div>
       <div
         className="card"
         style={{
@@ -313,7 +395,9 @@ export const MisconceptionsPage: React.FC<MisconceptionsPageProps> = ({
           <h3 style={{ fontSize: '18px', fontWeight: 800, color: 'var(--primary-navy)' }}>
             {searchQuery || statusFilter !== 'All' || priorityFilter !== 'All'
               ? 'No misconceptions found matching your filters'
-              : 'No misconceptions recorded'}
+              : activeTabType === 'past'
+              ? 'No past lecture misconceptions'
+              : 'No current misconceptions recorded'}
           </h3>
           <p style={{ fontSize: '14px', color: 'var(--text-muted)', maxWidth: '480px', margin: '8px auto 20px' }}>
             {searchQuery || statusFilter !== 'All' || priorityFilter !== 'All'
@@ -340,9 +424,13 @@ export const MisconceptionsPage: React.FC<MisconceptionsPageProps> = ({
           </div>
 
           {filteredMisconceptions.map((m) => {
-            const statusStyle = getStatusBadgeStyle(m.status);
-            const severityStyle = getSeverityBadgeStyle(m.severity_level);
-            const isResolved = m.status === 'Resolved';
+            const isResolved = normalizeStatus(m.status) === 'Resolved';
+            const currentScore = m.current_score ?? m.severity_score ?? 0;
+            const peakScore = m.peak_score ?? currentScore;
+            const displaySeverity = isResolved && m.severity_level === 'High' ? 'Low' : m.severity_level;
+            const statusStyle = getStatusBadgeStyle(normalizeStatus(m.status));
+            const severityStyle = getSeverityBadgeStyle(displaySeverity);
+            const severityLabel = displaySeverity === 'Low' ? 'Small mistake' : displaySeverity === 'Medium' ? 'Medium mistake' : 'Big mistake';
             const isUpdating = false; // Status managed by system
 
             return (
@@ -384,7 +472,8 @@ export const MisconceptionsPage: React.FC<MisconceptionsPageProps> = ({
                           textTransform: 'uppercase',
                         }}
                       >
-                        {m.severity_level} Severity • {m.severity_score}/100
+                        {isResolved ? 'Fixed' : severityLabel} • score {currentScore}
+                        {peakScore > currentScore ? ` (peak ${peakScore})` : ''}
                       </span>
 
                       <span
@@ -398,13 +487,44 @@ export const MisconceptionsPage: React.FC<MisconceptionsPageProps> = ({
                           border: `1px solid ${statusStyle.border}`,
                         }}
                       >
-                        {m.status}
+                        {isResolved ? '✅ Resolved' : normalizeStatus(m.status)}
                       </span>
 
-                      {/* Clickable Lecture Link */}
-                      {m.lecture_id && (
+                      {/* Lecture Reference */}
+                      {m.is_archived ? (
+                        <span
+                          style={{
+                            background: 'var(--bg-subtle)',
+                            border: '1px solid var(--border-subtle)',
+                            borderRadius: 'var(--radius-sm)',
+                            padding: '3px 8px',
+                            fontSize: '12px',
+                            color: 'var(--text-muted)',
+                            fontWeight: 600,
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: '5px',
+                          }}
+                          title="From deleted lecture history"
+                        >
+                          <Video size={12} />
+                          <span>{m.lecture_title || 'Past Lecture'}</span>
+                          <span
+                            style={{
+                              fontSize: '10px',
+                              background: '#F3F4F6',
+                              color: '#6B7280',
+                              padding: '1px 5px',
+                              borderRadius: '4px',
+                              fontWeight: 700,
+                            }}
+                          >
+                            Past
+                          </span>
+                        </span>
+                      ) : m.lecture_id ? (
                         <button
-                          onClick={() => onGoToLecture && onGoToLecture(m.lecture_id)}
+                          onClick={() => onGoToLecture && onGoToLecture(m.lecture_id!)}
                           style={{
                             background: 'var(--bg-subtle)',
                             border: '1px solid var(--border-subtle)',
@@ -424,8 +544,30 @@ export const MisconceptionsPage: React.FC<MisconceptionsPageProps> = ({
                           <span>{m.lecture_title || `Lecture #${m.lecture_id}`}</span>
                           {onGoToLecture && <ExternalLink size={11} />}
                         </button>
-                      )}
+                      ) : null}
                     </div>
+
+                    {/* Improvement Message when peak > current */}
+                    {peakScore > currentScore && (
+                      <div
+                        style={{
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: '6px',
+                          background: '#F0FDF4',
+                          border: '1px solid #BBF7D0',
+                          borderRadius: 'var(--radius-sm)',
+                          padding: '4px 10px',
+                          fontSize: '12px',
+                          color: '#15803D',
+                          fontWeight: 600,
+                          marginBottom: '8px',
+                        }}
+                      >
+                        <CheckCircle2 size={13} color="#16A34A" />
+                        <span>Great progress! Your score decreased from {peakScore} to {currentScore}.</span>
+                      </div>
+                    )}
 
                     {/* Misconception Title */}
                     <h3
@@ -475,23 +617,51 @@ export const MisconceptionsPage: React.FC<MisconceptionsPageProps> = ({
                       <Info size={14} />
                       <span>View Details</span>
                     </button>
-                    <button
-                      className="btn btn-primary btn-sm"
-                      onClick={() => onReviewConcept(m.id)}
-                      style={{ fontSize: '12px' }}
-                    >
-                      <Sparkles size={14} />
-                      <span>Review Concept</span>
-                      <ArrowRight size={13} />
-                    </button>
+                    {!m.is_archived && (
+                      <button
+                        className="btn btn-primary btn-sm"
+                        onClick={() => onReviewConcept(m.id)}
+                        style={{ fontSize: '12px' }}
+                      >
+                        <Sparkles size={14} />
+                        <span>Review Concept</span>
+                        <ArrowRight size={13} />
+                      </button>
+                    )}
                   </div>
                 </div>
 
                 {/* Summary */}
                 {m.summary && (
-                  <p style={{ fontSize: '14px', color: 'var(--text-muted)', lineHeight: 1.5 }}>
-                    {m.summary}
-                  </p>
+                  <ExpandableText text={m.summary ?? ''} />
+                )}
+
+                {/* Root Cause Banner */}
+                {m.root_cause_concept && (
+                  <div
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '8px',
+                      background: '#FFF7ED',
+                      border: '1px solid #FED7AA',
+                      borderRadius: 'var(--radius-md)',
+                      padding: '10px 14px',
+                      fontSize: '13px',
+                      color: '#92400E',
+                      fontWeight: 600,
+                    }}
+                  >
+                    <AlertTriangle size={15} color="#D97706" style={{ flexShrink: 0 }} />
+                    <span>
+                      Root cause: review{' '}
+                      <strong style={{ color: '#78350F' }}>"{m.root_cause_concept}"</strong>
+                      {m.root_cause_lecture_title ? (
+                        <> from <em>{m.root_cause_lecture_title}</em></>
+                      ) : null}{' '}
+                      first — fix this prerequisite gap to resolve the current misconception.
+                    </span>
+                  </div>
                 )}
 
                 {/* Comparison Boxes: Incorrect Understanding vs Correct Explanation */}
@@ -590,12 +760,12 @@ export const MisconceptionsPage: React.FC<MisconceptionsPageProps> = ({
                         fontWeight: 700,
                         padding: '4px 10px',
                         borderRadius: 'var(--radius-sm)',
-                        background: getStatusBadgeStyle(m.status).bg,
-                        color: getStatusBadgeStyle(m.status).text,
-                        border: `1px solid ${getStatusBadgeStyle(m.status).border}`,
+                        background: getStatusBadgeStyle(normalizeStatus(m.status)).bg,
+                        color: getStatusBadgeStyle(normalizeStatus(m.status)).text,
+                        border: `1px solid ${getStatusBadgeStyle(normalizeStatus(m.status)).border}`,
                       }}
                     >
-                      {m.status}
+                      {normalizeStatus(m.status)}
                     </span>
                     <span style={{ fontSize: '11px', color: 'var(--text-muted)', fontStyle: 'italic' }}>
                       System-managed
@@ -604,7 +774,7 @@ export const MisconceptionsPage: React.FC<MisconceptionsPageProps> = ({
 
                   {/* Signals recorded count */}
                   <div style={{ fontSize: '12px', color: 'var(--text-muted)', fontWeight: 600 }}>
-                    Evidentiary Signals: <strong>{m.evidence?.length || 0}</strong> recorded
+                    Based on <strong>{m.evidence?.length || 0}</strong> recorded interactions
                   </div>
                 </div>
 
@@ -679,30 +849,62 @@ export const MisconceptionsPage: React.FC<MisconceptionsPageProps> = ({
 
             {/* Modal Header */}
             <div style={{ marginBottom: '18px', paddingRight: '28px' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '8px', flexWrap: 'wrap' }}>
-                <span
-                  style={{
-                    fontSize: '11px',
-                    fontWeight: 700,
-                    padding: '3px 8px',
-                    borderRadius: 'var(--radius-sm)',
-                    ...getSeverityBadgeStyle(detailModalItem.severity_level),
-                  }}
-                >
-                  {detailModalItem.severity_level} Severity ({detailModalItem.severity_score}/100)
-                </span>
-                <span
-                  style={{
-                    fontSize: '11px',
-                    fontWeight: 700,
-                    padding: '3px 8px',
-                    borderRadius: 'var(--radius-sm)',
-                    ...getStatusBadgeStyle(detailModalItem.status),
-                  }}
-                >
-                  {detailModalItem.status}
-                </span>
-              </div>
+              {(() => {
+                const modalCurrent = detailModalItem.current_score ?? detailModalItem.severity_score ?? 0;
+                const modalPeak = detailModalItem.peak_score ?? modalCurrent;
+                const modalIsResolved = normalizeStatus(detailModalItem.status) === 'Resolved';
+                const modalDisplayLevel = modalIsResolved && detailModalItem.severity_level === 'High' ? 'Low' : detailModalItem.severity_level;
+                const modalSeverityLabel = modalDisplayLevel === 'Low' ? 'Small mistake' : modalDisplayLevel === 'Medium' ? 'Medium mistake' : 'Big mistake';
+
+                return (
+                  <>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '8px', flexWrap: 'wrap' }}>
+                      <span
+                        style={{
+                          fontSize: '11px',
+                          fontWeight: 700,
+                          padding: '3px 8px',
+                          borderRadius: 'var(--radius-sm)',
+                          ...getSeverityBadgeStyle(modalDisplayLevel),
+                        }}
+                      >
+                        {modalIsResolved ? 'Fixed' : modalSeverityLabel} • score {modalCurrent}{modalPeak > modalCurrent ? ` (peak ${modalPeak})` : ''}
+                      </span>
+                      <span
+                        style={{
+                          fontSize: '11px',
+                          fontWeight: 700,
+                          padding: '3px 8px',
+                          borderRadius: 'var(--radius-sm)',
+                          ...getStatusBadgeStyle(normalizeStatus(detailModalItem.status)),
+                        }}
+                      >
+                        {modalIsResolved ? '✅ Resolved' : normalizeStatus(detailModalItem.status)}
+                      </span>
+                    </div>
+                    {modalPeak > modalCurrent && (
+                      <div
+                        style={{
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: '6px',
+                          background: '#F0FDF4',
+                          border: '1px solid #BBF7D0',
+                          borderRadius: 'var(--radius-sm)',
+                          padding: '4px 10px',
+                          fontSize: '12px',
+                          color: '#15803D',
+                          fontWeight: 600,
+                          marginBottom: '8px',
+                        }}
+                      >
+                        <CheckCircle2 size={13} color="#16A34A" />
+                        <span>Great progress! Your score decreased from {modalPeak} to {modalCurrent}.</span>
+                      </div>
+                    )}
+                  </>
+                );
+              })()}
               <h2 style={{ fontSize: '22px', fontWeight: 800, color: 'var(--primary-navy)', lineHeight: 1.3 }}>
                 {detailModalItem.title}
               </h2>
@@ -766,14 +968,15 @@ export const MisconceptionsPage: React.FC<MisconceptionsPageProps> = ({
                     <div style={{ fontSize: '13px', color: '#0C4A6E', lineHeight: 1.6, fontStyle: 'italic' }}>
                       "{detailData.lecture_evidence}"
                     </div>
-                    {detailData.concept_start_time != null && onGoToLecture && (
+                    {detailData.concept_start_time != null && onGoToLecture && detailData.lecture_id && !detailModalItem.is_archived && (
                       <button
                         className="btn btn-secondary btn-sm"
                         style={{ marginTop: '10px', fontSize: '12px' }}
                         onClick={() => {
+                          const lid = detailData.lecture_id;
                           setDetailModalItem(null);
                           setDetailData(null);
-                          onGoToLecture(detailData.lecture_id);
+                          if (lid) onGoToLecture(lid);
                         }}
                       >
                         <Video size={13} />
@@ -833,6 +1036,50 @@ export const MisconceptionsPage: React.FC<MisconceptionsPageProps> = ({
                   </div>
                 )}
 
+                {/* Root Cause (from card data, available even inside modal) */}
+                {detailModalItem.root_cause_concept && (
+                  <div
+                    style={{
+                      display: 'flex',
+                      alignItems: 'flex-start',
+                      gap: '10px',
+                      background: '#FFF7ED',
+                      border: '1px solid #FED7AA',
+                      borderRadius: 'var(--radius-md)',
+                      padding: '14px 16px',
+                    }}
+                  >
+                    <AlertTriangle size={16} color="#D97706" style={{ flexShrink: 0, marginTop: '1px' }} />
+                    <div>
+                      <div style={{ fontSize: '11px', fontWeight: 800, color: '#B45309', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '5px' }}>
+                        Root Cause Identified
+                      </div>
+                      <div style={{ fontSize: '13px', color: '#78350F', lineHeight: 1.6 }}>
+                        This misconception likely stems from an unresolved gap in{' '}
+                        <strong>"{detailModalItem.root_cause_concept}"</strong>
+                        {detailModalItem.root_cause_lecture_title ? (
+                          <> (from lecture: <em>{detailModalItem.root_cause_lecture_title}</em>)</>
+                        ) : null}
+                        . Resolve that prerequisite concept first to fix this one.
+                      </div>
+                      {detailModalItem.root_cause_lecture_id && onGoToLecture && (
+                        <button
+                          className="btn btn-secondary btn-sm"
+                          style={{ marginTop: '10px', fontSize: '12px' }}
+                          onClick={() => {
+                            setDetailModalItem(null);
+                            setDetailData(null);
+                            onGoToLecture(detailModalItem.root_cause_lecture_id!);
+                          }}
+                        >
+                          <BookOpen size={13} />
+                          <span>Go to Prerequisite Lecture</span>
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                )}
+
               </div>
             )}
 
@@ -869,10 +1116,10 @@ export const MisconceptionsPage: React.FC<MisconceptionsPageProps> = ({
                 </div>
               </div>
 
-              {/* Evidentiary Signals List */}
+              {/* Recorded interactions list */}
               <div>
                 <h4 style={{ fontSize: '13px', fontWeight: 700, color: 'var(--primary-navy)', marginBottom: '10px', textTransform: 'uppercase' }}>
-                  Evidentiary Signal Trail ({detailModalItem.evidence?.length || 0})
+                  Based on {detailModalItem.evidence?.length || 0} recorded interaction{(detailModalItem.evidence?.length || 0) !== 1 ? 's' : ''}
                 </h4>
                 <div
                   style={{
@@ -905,7 +1152,7 @@ export const MisconceptionsPage: React.FC<MisconceptionsPageProps> = ({
                     ))
                   ) : (
                     <div style={{ fontSize: '13px', color: 'var(--text-muted)' }}>
-                      No evidentiary signals recorded yet.
+                      No interactions recorded yet.
                     </div>
                   )}
                 </div>
@@ -933,40 +1180,43 @@ export const MisconceptionsPage: React.FC<MisconceptionsPageProps> = ({
                     fontWeight: 700,
                     padding: '4px 10px',
                     borderRadius: 'var(--radius-sm)',
-                    background: getStatusBadgeStyle(detailModalItem.status).bg,
-                    color: getStatusBadgeStyle(detailModalItem.status).text,
-                    border: `1px solid ${getStatusBadgeStyle(detailModalItem.status).border}`,
+                    background: getStatusBadgeStyle(normalizeStatus(detailModalItem.status)).bg,
+                    color: getStatusBadgeStyle(normalizeStatus(detailModalItem.status)).text,
+                    border: `1px solid ${getStatusBadgeStyle(normalizeStatus(detailModalItem.status)).border}`,
                   }}
                 >
-                  {detailModalItem.status}
+                  {normalizeStatus(detailModalItem.status)}
                 </span>
                 <span style={{ fontSize: '11px', color: 'var(--text-muted)', fontStyle: 'italic' }}>System-managed</span>
               </div>
 
               <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                {detailModalItem.lecture_id && onGoToLecture && (
+                {!detailModalItem.is_archived && detailModalItem.lecture_id && onGoToLecture && (
                   <button
                     className="btn btn-secondary btn-sm"
                     onClick={() => {
+                      const lid = detailModalItem.lecture_id;
                       setDetailModalItem(null);
-                      onGoToLecture(detailModalItem.lecture_id);
+                      if (lid) onGoToLecture(lid);
                     }}
                   >
                     <Video size={14} />
                     <span>Open Lecture</span>
                   </button>
                 )}
-                <button
-                  className="btn btn-primary btn-sm"
-                  onClick={() => {
-                    setDetailModalItem(null);
-                    setDetailData(null);
-                    onReviewConcept(detailModalItem.id);
-                  }}
-                >
-                  <Sparkles size={14} />
-                  <span>Review Concept</span>
-                </button>
+                {!detailModalItem.is_archived && (
+                  <button
+                    className="btn btn-primary btn-sm"
+                    onClick={() => {
+                      setDetailModalItem(null);
+                      setDetailData(null);
+                      onReviewConcept(detailModalItem.id);
+                    }}
+                  >
+                    <Sparkles size={14} />
+                    <span>Review Concept</span>
+                  </button>
+                )}
               </div>
             </div>
           </div>

@@ -8,6 +8,7 @@ import type {
   PrerequisiteRecheck,
   PrerequisiteRecheckSubmitResult,
 } from '../types';
+import SpeedMenu from '../components/SpeedMenu';
 import {
   Play,
   Pause,
@@ -33,7 +34,11 @@ import {
   CheckCircle,
   XCircle,
   Edit3,
-  X
+  X,
+  Maximize,
+  Minimize,
+  Eye,
+  EyeOff,
 } from 'lucide-react';
 import { McqSourceSection } from '../components/McqSourceSection';
 
@@ -65,12 +70,141 @@ export const PlayerPage: React.FC<PlayerPageProps> = ({
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
 
+  // ---------------------------------------------------------------
   // Media Player State
+  // ---------------------------------------------------------------
+  const mediaRef = useRef<HTMLVideoElement | HTMLAudioElement | null>(null);
+  const wrapperRef = useRef<HTMLDivElement>(null);
   const [isPlaying, setIsPlaying] = useState<boolean>(false);
   const [currentTime, setCurrentTime] = useState<number>(0);
   const [duration, setDuration] = useState<number>(0);
   const [volume, setVolume] = useState<number>(0.8);
   const [isMuted, setIsMuted] = useState<boolean>(false);
+
+  // Playback speed (remembered between visits)
+  const [speed, setSpeed] = useState<number>(() => {
+    try {
+      const saved = Number(localStorage.getItem('playbackSpeed'));
+      return saved > 0 ? saved : 1;
+    } catch {
+      return 1;
+    }
+  });
+
+  // Fullscreen
+  const [isFullscreen, setIsFullscreen] = useState<boolean>(false);
+
+  // Assessment panel visibility (remembered between visits)
+  const [showAssessment, setShowAssessment] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem('showAssessment') !== 'false';
+    } catch {
+      return true;
+    }
+  });
+
+  // Narrow screens: stack the layout in a single column
+  const [isNarrow, setIsNarrow] = useState<boolean>(
+    () => typeof window !== 'undefined' && window.innerWidth < 900
+  );
+
+  // Pause icon that appears over the video while playing
+  const [showPauseOverlay, setShowPauseOverlay] = useState<boolean>(false);
+  const overlayTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const togglePlay = () => {
+    const media = mediaRef.current;
+    if (!media) return;
+    if (media.paused) {
+      media.play().catch(() => {});
+    } else {
+      media.pause();
+    }
+  };
+
+  const handleMediaMouseMove = () => {
+    setShowPauseOverlay(true);
+    if (overlayTimerRef.current) clearTimeout(overlayTimerRef.current);
+    overlayTimerRef.current = setTimeout(() => setShowPauseOverlay(false), 2000);
+  };
+
+  const toggleFullscreen = () => {
+    const el = wrapperRef.current;
+    if (!el) return;
+    if (!document.fullscreenElement) {
+      el.requestFullscreen().catch(() => {});
+    } else {
+      document.exitFullscreen().catch(() => {});
+    }
+  };
+
+  const toggleAssessment = () => {
+    setShowAssessment((prev) => {
+      const next = !prev;
+      try {
+        localStorage.setItem('showAssessment', String(next));
+      } catch {
+        /* ignore storage errors */
+      }
+      return next;
+    });
+  };
+
+  // Save speed + apply it to the media element
+  useEffect(() => {
+    try {
+      localStorage.setItem('playbackSpeed', String(speed));
+    } catch {
+      /* ignore storage errors */
+    }
+    if (mediaRef.current) mediaRef.current.playbackRate = speed;
+  }, [speed]);
+
+  // Track fullscreen changes (including Esc key)
+  useEffect(() => {
+    const onChange = () => setIsFullscreen(document.fullscreenElement === wrapperRef.current);
+    document.addEventListener('fullscreenchange', onChange);
+    return () => document.removeEventListener('fullscreenchange', onChange);
+  }, []);
+
+  // Track window width for the responsive layout
+  useEffect(() => {
+    const onResize = () => setIsNarrow(window.innerWidth < 900);
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, []);
+
+  // Space bar toggles play/pause (except while typing or on a focused button)
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.code !== 'Space') return;
+      const el = e.target as HTMLElement | null;
+      const tag = el?.tagName;
+      const isRange = tag === 'INPUT' && (el as HTMLInputElement).type === 'range';
+      if (
+        (tag === 'INPUT' && !isRange) ||
+        tag === 'TEXTAREA' ||
+        tag === 'SELECT' ||
+        tag === 'BUTTON' ||
+        tag === 'SUMMARY' ||
+        el?.isContentEditable
+      ) {
+        return;
+      }
+      if (!mediaRef.current) return;
+      e.preventDefault();
+      togglePlay();
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, []);
+
+  // Clear the overlay timer when leaving the page
+  useEffect(() => {
+    return () => {
+      if (overlayTimerRef.current) clearTimeout(overlayTimerRef.current);
+    };
+  }, []);
 
   // Active Concept State & Notes State
   const [activeConceptIndex, setActiveConceptIndex] = useState<number>(0);
@@ -105,16 +239,41 @@ export const PlayerPage: React.FC<PlayerPageProps> = ({
     result?: PrerequisiteRecheckSubmitResult;
     submitting?: boolean;
   }>>({});
+  const [assessmentMode, setAssessmentMode] = useState<'recheck' | 'checkpoints'>('recheck');
+  const [regeneratingQuestions, setRegeneratingQuestions] = useState<boolean>(false);
+  const [regenerateError, setRegenerateError] = useState<string | null>(null);
+
+  const handleRegenerateQuestions = async () => {
+    if (!lecture) return;
+    setRegeneratingQuestions(true);
+    setRegenerateError(null);
+    try {
+      await api.lectures.regenerateCheckpoints(lecture.id);
+      await loadLecture();
+      setAssessmentMode('checkpoints');
+    } catch (err: any) {
+      setRegenerateError(err.message || 'Failed to generate checkpoint questions.');
+    } finally {
+      setRegeneratingQuestions(false);
+    }
+  };
 
   const loadRechecks = async (id: number) => {
     try {
       const data = await api.lectures.getRechecks(id);
-      setRechecks(Array.isArray(data) ? data : []);
+      const items = Array.isArray(data) ? data : [];
+      setRechecks(items);
       setActiveRecheckIndex(0);
       setRecheckSkipped(false);
       setRecheckAnswers({});
+      if (items.length > 0) {
+        setAssessmentMode('recheck');
+      } else {
+        setAssessmentMode('checkpoints');
+      }
     } catch {
       setRechecks([]);
+      setAssessmentMode('checkpoints');
     }
   };
 
@@ -172,6 +331,7 @@ export const PlayerPage: React.FC<PlayerPageProps> = ({
 
   const handleSkipRecheck = () => {
     setRecheckSkipped(true);
+    setAssessmentMode('checkpoints');
   };
 
   // Rename modal state
@@ -202,54 +362,8 @@ export const PlayerPage: React.FC<PlayerPageProps> = ({
     }
   };
 
-  // Prerequisite edit control state
-  const [isEditingPrereq, setIsEditingPrereq] = useState<boolean>(false);
-  const [selectedPrereqId, setSelectedPrereqId] = useState<string>('');
-  const [availablePrereqs, setAvailablePrereqs] = useState<Lecture[]>([]);
-  const [savingPrereq, setSavingPrereq] = useState<boolean>(false);
-
-  const handleStartEditPrereq = async () => {
-    if (!lecture) return;
-    setSelectedPrereqId(
-      lecture.prerequisite_lecture_id ? String(lecture.prerequisite_lecture_id) : ''
-    );
-    setIsEditingPrereq(true);
-    try {
-      const allLecs = await api.lectures.list();
-      // Exclude current lecture to prevent self-prerequisite selection
-      const filtered = Array.isArray(allLecs)
-        ? allLecs.filter((l) => l.id !== lecture.id)
-        : [];
-      setAvailablePrereqs(filtered);
-    } catch (e) {
-      console.error('Failed to load lecture list for prerequisite selection', e);
-    }
-  };
-
-  const handleSavePrereq = async () => {
-    if (!lecture) return;
-    setSavingPrereq(true);
-    try {
-      const prereqId = selectedPrereqId ? parseInt(selectedPrereqId, 10) : null;
-      const res = await api.lectures.update(lecture.id, {
-        prerequisite_lecture_id: prereqId,
-      });
-      setLecture({
-        ...lecture,
-        prerequisite_lecture_id: res.prerequisite_lecture_id,
-        prerequisite_lecture_title: res.prerequisite_lecture_title,
-      });
-      setIsEditingPrereq(false);
-      // Reload re-checks immediately for this new prerequisite
-      await loadRechecks(lecture.id);
-    } catch (err: any) {
-      alert(`Could not update prerequisite: ${err.message || 'Validation error'}`);
-    } finally {
-      setSavingPrereq(false);
-    }
-  };
-
-  const mediaRef = useRef<HTMLVideoElement | HTMLAudioElement | null>(null);
+  // Prerequisite lecture state — auto-detected, read-only
+  const [prereqLecture, setPrereqLecture] = useState<Lecture | null>(null);
 
   const loadLecture = async () => {
     setLoading(true);
@@ -261,6 +375,17 @@ export const PlayerPage: React.FC<PlayerPageProps> = ({
       }
       initializeQuestionsFromLecture(data);
       await loadRechecks(lectureId);
+      // Fetch prerequisite lecture for warning banner (auto-detected, read-only)
+      if (data.prerequisite_lecture_id) {
+        try {
+          const prereq = await api.lectures.get(data.prerequisite_lecture_id);
+          setPrereqLecture(prereq);
+        } catch {
+          setPrereqLecture(null);
+        }
+      } else {
+        setPrereqLecture(null);
+      }
     } catch (err: any) {
       setError(err.message || 'Failed to load lecture details.');
     } finally {
@@ -276,6 +401,30 @@ export const PlayerPage: React.FC<PlayerPageProps> = ({
       // Ignore background sync errors
     }
   };
+
+  // Auto-poll when lecture is still in background processing
+  useEffect(() => {
+    if (!lecture) return;
+    const status = lecture.processing_status || lecture.status;
+    if (status !== 'ready' && status !== 'failed') {
+      const pollTimer = setInterval(async () => {
+        try {
+          const fresh = await api.lectures.get(lectureId);
+          setLecture(fresh);
+          if (fresh.processing_status === 'ready' || fresh.status === 'ready') {
+            initializeQuestionsFromLecture(fresh);
+            if (fresh.duration_seconds) setDuration(fresh.duration_seconds);
+            clearInterval(pollTimer);
+          } else if (fresh.processing_status === 'failed' || fresh.status === 'failed') {
+            clearInterval(pollTimer);
+          }
+        } catch {
+          // ignore background poll errors
+        }
+      }, 3000);
+      return () => clearInterval(pollTimer);
+    }
+  }, [lecture?.processing_status, lecture?.status, lectureId]);
 
   const sortQuestions = (items: QuestionItem[]): QuestionItem[] => {
     return [...items].sort((a, b) => {
@@ -708,16 +857,16 @@ export const PlayerPage: React.FC<PlayerPageProps> = ({
   }
 
   // If lecture processing failed in backend
-  if (lecture.status === 'failed') {
+  if (lecture.status === 'failed' || lecture.processing_status === 'failed') {
     return (
       <div className="card" style={{ maxWidth: '640px', margin: '40px auto', textAlign: 'center', padding: '36px' }}>
         <AlertTriangle size={42} color="#DC2626" style={{ margin: '0 auto 16px' }} />
         <h2 style={{ fontSize: '22px', fontWeight: 800, color: '#991B1B' }}>Lecture Processing Failed</h2>
         <div style={{ background: '#FEF2F2', border: '1px solid #FCA5A5', borderRadius: '8px', padding: '16px', margin: '16px 0', textAlign: 'left', fontSize: '13px', color: '#7F1D1D', lineHeight: 1.5 }}>
-          {lecture.processing_error || 'MindTrace could not transcribe speech or extract genuine concepts from this lecture recording.'}
+          {lecture.error_message || lecture.processing_error || 'MindTrace could not transcribe speech or extract genuine concepts from this lecture recording.'}
         </div>
         <p style={{ fontSize: '13px', color: 'var(--text-muted)', marginBottom: '24px' }}>
-          MindTrace transcribes speech locally using Faster-Whisper on CPU with zero external APIs. If transcription failed, please ensure the audio contains clear spoken lecture dialogue, or provide an accompanying transcript file (.srt, .vtt, or text notes).
+          MindTrace transcribes speech and extracts concepts from your recording. If processing failed, please ensure the audio contains clear spoken lecture dialogue, or provide an accompanying transcript file (.srt, .vtt, or text notes).
         </p>
         <div style={{ display: 'flex', justifyContent: 'center', gap: '12px' }}>
           <button className="btn btn-secondary btn-sm" onClick={onBack}>
@@ -748,6 +897,20 @@ export const PlayerPage: React.FC<PlayerPageProps> = ({
           `Superficial pattern-matching without checking underlying semantic invariants`,
         ];
 
+  // Player card styling (normal vs fullscreen)
+  const playerCardStyle: React.CSSProperties = isFullscreen
+    ? {
+        padding: 0,
+        overflow: 'hidden',
+        marginBottom: 0,
+        display: 'flex',
+        flexDirection: 'column',
+        width: '100%',
+        height: '100%',
+        borderRadius: 0,
+        background: '#000000',
+      }
+    : { padding: 0, overflow: 'hidden', marginBottom: '20px' };
 
   return (
     <div style={{ paddingBottom: '60px' }}>
@@ -772,101 +935,106 @@ export const PlayerPage: React.FC<PlayerPageProps> = ({
               <span>Rename</span>
             </button>
 
-            {/* Prerequisite Lecture Control */}
-            <div
-              style={{
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: '6px',
-                fontSize: '12px',
-                paddingLeft: '8px',
-                borderLeft: '1px solid var(--border-subtle)',
-              }}
-            >
+            {/* Prerequisite Lecture — Auto-detected, read-only */}
+            <div style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', fontSize: '12px', paddingLeft: '8px', borderLeft: '1px solid var(--border-subtle)' }}>
               <span style={{ color: 'var(--text-muted)', fontWeight: 600 }}>Prerequisite:</span>
-              {!isEditingPrereq ? (
-                <div style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
-                  <span
-                    style={{
-                      fontWeight: 700,
-                      color: lecture.prerequisite_lecture_title ? 'var(--primary-navy)' : 'var(--text-muted)',
-                      background: 'var(--bg-subtle)',
-                      padding: '2px 8px',
-                      borderRadius: 'var(--radius-sm)',
-                      border: '1px solid var(--border-subtle)',
-                      maxWidth: '180px',
-                      overflow: 'hidden',
-                      textOverflow: 'ellipsis',
-                      whiteSpace: 'nowrap',
-                    }}
-                    title={lecture.prerequisite_lecture_title || 'None'}
-                  >
-                    {lecture.prerequisite_lecture_title || 'None'}
-                  </span>
-                  <button
-                    type="button"
-                    className="btn btn-secondary btn-sm"
-                    style={{ padding: '2px 8px', fontSize: '11px', height: '22px' }}
-                    onClick={handleStartEditPrereq}
-                    title="Change prerequisite lecture"
-                  >
-                    <span>Change</span>
-                  </button>
-                </div>
-              ) : (
-                <div style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
-                  <select
-                    id="select-change-prerequisite"
-                    value={selectedPrereqId}
-                    disabled={savingPrereq}
-                    onChange={(e) => setSelectedPrereqId(e.target.value)}
-                    style={{
-                      fontSize: '12px',
-                      padding: '2px 6px',
-                      borderRadius: 'var(--radius-sm)',
-                      border: '1px solid var(--accent-purple)',
-                      background: '#FFFFFF',
-                      color: 'var(--primary-navy)',
-                      maxWidth: '180px',
-                    }}
-                  >
-                    <option value="">None</option>
-                    {availablePrereqs.map((l) => (
-                      <option key={l.id} value={l.id}>
-                        {l.title} {l.course_code ? `(${l.course_code})` : ''}
-                      </option>
-                    ))}
-                  </select>
-                  <button
-                    type="button"
-                    className="btn btn-primary btn-sm"
-                    style={{ padding: '2px 8px', fontSize: '11px', height: '22px' }}
-                    disabled={savingPrereq}
-                    onClick={handleSavePrereq}
-                  >
-                    <span>{savingPrereq ? 'Saving...' : 'Save'}</span>
-                  </button>
-                  <button
-                    type="button"
-                    className="btn btn-secondary btn-sm"
-                    style={{ padding: '2px 6px', fontSize: '11px', height: '22px' }}
-                    disabled={savingPrereq}
-                    onClick={() => setIsEditingPrereq(false)}
-                  >
-                    <span>Cancel</span>
-                  </button>
-                </div>
-              )}
+              <span style={{
+                fontWeight: 700,
+                color: lecture.prerequisite_lecture_title ? 'var(--primary-navy)' : 'var(--text-muted)',
+                background: 'var(--bg-subtle)',
+                padding: '2px 8px',
+                borderRadius: 'var(--radius-sm)',
+                border: '1px solid var(--border-subtle)',
+                maxWidth: '180px',
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap',
+                fontSize: '12px',
+              }}>
+                {lecture.prerequisite_lecture_title || 'No prerequisite detected'}
+              </span>
             </div>
           </div>
         </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
+          <button
+            id="btn-toggle-assessment"
+            type="button"
+            className={`btn ${!showAssessment ? 'btn-primary' : 'btn-secondary'} btn-sm`}
+            onClick={toggleAssessment}
+            aria-pressed={showAssessment}
+            aria-label={showAssessment ? 'Hide assessment panel' : 'Show assessment panel'}
+            title={showAssessment ? 'Hide the assessment and watch in full width' : 'Show the assessment panel'}
+            style={!showAssessment ? { background: 'var(--accent-purple)', borderColor: 'var(--accent-purple)', color: '#FFFFFF', fontWeight: 700 } : undefined}
+          >
+            {showAssessment ? <EyeOff size={14} /> : <Eye size={14} />}
+            <span>{showAssessment ? 'Hide Assessment' : 'Show Assessment'}</span>
+          </button>
           <button className="btn btn-secondary btn-sm" onClick={onNavigateToMisconceptions}>
             <AlertTriangle size={14} color="var(--priority-high-text)" />
             <span>Misconceptions ({lecture.unresolved_count} Unresolved)</span>
           </button>
         </div>
       </div>
+
+      {/* Background Processing Progress Banner */}
+      {lecture && (lecture.processing_status || lecture.status) !== 'ready' && (lecture.processing_status || lecture.status) !== 'failed' && (
+        <div
+          style={{
+            background: '#EFF6FF',
+            border: '1px solid #BFDBFE',
+            borderRadius: 'var(--radius-md)',
+            padding: '12px 16px',
+            marginBottom: '16px',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            flexWrap: 'wrap',
+            gap: '8px'
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+            <RefreshCw className="animate-spin" size={16} color="#2563EB" style={{ animation: 'spin 2s linear infinite' }} />
+            <div>
+              <span style={{ fontSize: '13px', fontWeight: 700, color: '#1E40AF', textTransform: 'capitalize' }}>
+                Pipeline Status: {lecture.processing_status || lecture.status}... ({lecture.progress || 0}%)
+              </span>
+              <div style={{ fontSize: '11px', color: '#3B82F6', marginTop: '2px' }}>
+                Extracting acoustic stream, transcribing with Groq Whisper, and generating concept checkpoints.
+              </div>
+            </div>
+          </div>
+          <span style={{ fontSize: '11px', color: '#60A5FA', fontFamily: 'JetBrains Mono' }}>
+            Auto-refreshing
+          </span>
+        </div>
+      )}
+
+      {/* Processing Failed Banner */}
+      {lecture && ((lecture.processing_status || lecture.status) === 'failed') && (
+        <div
+          style={{
+            background: '#FEF2F2',
+            border: '1px solid #FECACA',
+            borderRadius: 'var(--radius-md)',
+            padding: '12px 16px',
+            marginBottom: '16px',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '10px'
+          }}
+        >
+          <AlertCircle size={18} color="#DC2626" />
+          <div>
+            <div style={{ fontSize: '13px', fontWeight: 700, color: '#991B1B' }}>
+              Processing Failed
+            </div>
+            <div style={{ fontSize: '12px', color: '#B91C1C', marginTop: '2px' }}>
+              {lecture.error_message || lecture.processing_error || 'An error occurred during audio processing or concept generation.'}
+            </div>
+          </div>
+        </div>
+      )}
 
       {subtleWarning && (
         <div
@@ -897,18 +1065,125 @@ export const PlayerPage: React.FC<PlayerPageProps> = ({
         </div>
       )}
 
-      {/* Main Grid: Player on Left, Checkpoint on Right */}
-      <div className="player-layout-grid">
+      {/* Prerequisite Warning Banner — auto-detected, read-only */}
+      {lecture.prerequisite_lecture_id && (
+        <div style={{
+          display: 'flex', alignItems: 'center', gap: '10px',
+          background: prereqLecture && prereqLecture.unresolved_count > 0 ? '#FFF7ED' : '#F0FDF4',
+          border: `1px solid ${prereqLecture && prereqLecture.unresolved_count > 0 ? '#FED7AA' : '#BBF7D0'}`,
+          borderRadius: 'var(--radius-md)', padding: '12px 16px', marginBottom: '16px', fontSize: '13px',
+        }}>
+          <BookOpen size={16} color={prereqLecture && prereqLecture.unresolved_count > 0 ? '#D97706' : '#16A34A'} style={{ flexShrink: 0 }} />
+          <span style={{ color: prereqLecture && prereqLecture.unresolved_count > 0 ? '#78350F' : '#166534', fontWeight: 600 }}>
+            {prereqLecture && prereqLecture.unresolved_count > 0
+              ? `This lecture builds on "${lecture.prerequisite_lecture_title}". You have ${prereqLecture.unresolved_count} unresolved misconception(s) there. Review it first.`
+              : `This lecture builds on "${lecture.prerequisite_lecture_title}".`}
+          </span>
+        </div>
+      )}
+
+      {/* Visible control when assessment is hidden */}
+      {!showAssessment && (
+        <div
+          style={{
+            background: '#F8FAFC',
+            border: '1px solid #CBD5E1',
+            borderRadius: 'var(--radius-md)',
+            padding: '10px 16px',
+            marginBottom: '16px',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: '12px',
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <FileQuestion size={16} color="var(--accent-purple)" />
+            <span style={{ fontSize: '13px', color: 'var(--primary-navy)', fontWeight: 600 }}>
+              The Interactive Diagnostic Assessment is currently hidden.
+            </span>
+          </div>
+          <button
+            type="button"
+            id="btn-show-assessment-banner"
+            className="btn btn-primary btn-sm"
+            onClick={toggleAssessment}
+            style={{ fontSize: '12px', padding: '4px 12px' }}
+          >
+            <Eye size={13} />
+            <span>Show Assessment</span>
+          </button>
+        </div>
+      )}
+
+      {/* Main Grid: Player on Left, Checkpoint on Right (right column hides when assessment is hidden) */}
+      <div
+        className="player-layout-grid"
+        style={{
+          display: 'grid',
+          gridTemplateColumns: showAssessment && !isNarrow ? '1fr 380px' : '1fr',
+          gap: '20px',
+        }}
+      >
         {/* LEFT AREA: Video/Audio Player, Concept Notes & Summary Cards, Timeline */}
-        <div>
-          {/* Media Player Card */}
-          <div id="media-player-card" className="card" style={{ padding: '0', overflow: 'hidden', marginBottom: '20px' }}>
-            <div style={{ position: 'relative', background: '#000000', minHeight: '280px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+        <div style={{ minWidth: 0 }}>
+          {/* Media Player Card (this wrapper goes fullscreen) */}
+          <div id="media-player-card" className="card" ref={wrapperRef} style={playerCardStyle}>
+            {/* Video area: click anywhere to play/pause */}
+            <div
+              style={{
+                position: 'relative',
+                background: '#000000',
+                minHeight: isFullscreen ? 0 : '280px',
+                flex: isFullscreen ? 1 : undefined,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                cursor: 'pointer',
+              }}
+              onClick={() => {
+                togglePlay();
+                handleMediaMouseMove();
+              }}
+              onMouseMove={handleMediaMouseMove}
+              onMouseLeave={() => setShowPauseOverlay(false)}
+            >
+              {/* Play / Pause icon on the video */}
+              <div
+                aria-hidden="true"
+                style={{
+                  position: 'absolute',
+                  top: '50%',
+                  left: '50%',
+                  transform: 'translate(-50%, -50%)',
+                  width: '72px',
+                  height: '72px',
+                  borderRadius: '50%',
+                  background: 'rgba(0,0,0,0.55)',
+                  color: '#FFFFFF',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  pointerEvents: 'none',
+                  zIndex: 2,
+                  opacity: !isPlaying || showPauseOverlay ? 1 : 0,
+                  transition: 'opacity 0.25s ease',
+                }}
+              >
+                {isPlaying ? <Pause size={34} /> : <Play size={34} style={{ marginLeft: '4px' }} />}
+              </div>
+
               {lecture.media_type === 'video' ? (
                 <video
                   ref={mediaRef as React.RefObject<HTMLVideoElement>}
                   src={`${api.lectures.getMediaUrl(lectureId)}`}
-                  style={{ width: '100%', maxHeight: '420px', display: 'block' }}
+                  style={{
+                    width: '100%',
+                    maxHeight: isFullscreen ? '100%' : '420px',
+                    height: isFullscreen ? '100%' : undefined,
+                    objectFit: 'contain',
+                    display: 'block',
+                  }}
                   onTimeUpdate={() => {
                     if (mediaRef.current) setCurrentTime(mediaRef.current.currentTime);
                   }}
@@ -916,6 +1191,8 @@ export const PlayerPage: React.FC<PlayerPageProps> = ({
                     if (mediaRef.current && mediaRef.current.duration) {
                       setDuration(mediaRef.current.duration);
                     }
+                    // Apply remembered speed when metadata loads
+                    if (mediaRef.current) mediaRef.current.playbackRate = speed;
                   }}
                   onPlay={() => setIsPlaying(true)}
                   onPause={() => setIsPlaying(false)}
@@ -937,6 +1214,7 @@ export const PlayerPage: React.FC<PlayerPageProps> = ({
                       if (mediaRef.current && mediaRef.current.duration) {
                         setDuration(mediaRef.current.duration);
                       }
+                      if (mediaRef.current) mediaRef.current.playbackRate = speed;
                     }}
                     onPlay={() => setIsPlaying(true)}
                     onPause={() => setIsPlaying(false)}
@@ -966,19 +1244,12 @@ export const PlayerPage: React.FC<PlayerPageProps> = ({
                 </span>
               </div>
 
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '10px' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
                   <button
                     id="btn-play-pause"
                     className="btn btn-accent btn-sm"
-                    onClick={() => {
-                      if (!mediaRef.current) return;
-                      if (isPlaying) {
-                        mediaRef.current.pause();
-                      } else {
-                        mediaRef.current.play().catch(() => {});
-                      }
-                    }}
+                    onClick={togglePlay}
                   >
                     {isPlaying ? <Pause size={16} /> : <Play size={16} />}
                     <span>{isPlaying ? 'Pause' : 'Play'}</span>
@@ -1002,7 +1273,27 @@ export const PlayerPage: React.FC<PlayerPageProps> = ({
                 </div>
 
                 <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                  {/* Playback speed */}
+                  <SpeedMenu mediaRef={mediaRef} value={speed} onChange={setSpeed} />
+
+                  {/* Fullscreen */}
                   <button
+                    id="btn-fullscreen"
+                    type="button"
+                    className="btn btn-secondary btn-sm"
+                    style={{ background: '#1E293B', color: '#E2E8F0', borderColor: '#334155' }}
+                    onClick={toggleFullscreen}
+                    aria-label={isFullscreen ? 'Exit fullscreen' : 'Enter fullscreen'}
+                    title={isFullscreen ? 'Exit fullscreen' : 'Fullscreen'}
+                  >
+                    {isFullscreen ? <Minimize size={14} /> : <Maximize size={14} />}
+                    <span>{isFullscreen ? 'Exit' : 'Fullscreen'}</span>
+                  </button>
+
+                  {/* Volume */}
+                  <button
+                    type="button"
+                    aria-label={isMuted ? 'Unmute' : 'Mute'}
                     style={{ background: 'none', border: 'none', color: '#94A3B8', cursor: 'pointer' }}
                     onClick={() => {
                       if (!mediaRef.current) return;
@@ -1014,6 +1305,7 @@ export const PlayerPage: React.FC<PlayerPageProps> = ({
                   </button>
                   <input
                     type="range"
+                    aria-label="Volume"
                     min={0}
                     max={1}
                     step={0.05}
@@ -1045,7 +1337,7 @@ export const PlayerPage: React.FC<PlayerPageProps> = ({
               </div>
               <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
                 <span style={{ fontSize: '11px', fontWeight: 700, color: 'var(--accent-purple)', background: 'var(--accent-soft)', padding: '2px 8px', borderRadius: 'var(--radius-full)' }}>
-                  Segment {selectedNotesConceptIndex + 1} of {concepts.length}
+                  {concepts.length > 0 ? `Segment ${selectedNotesConceptIndex + 1} of ${concepts.length}` : '0 Segments'}
                 </span>
                 {notesConcept && (
                   <button
@@ -1107,68 +1399,76 @@ export const PlayerPage: React.FC<PlayerPageProps> = ({
               </div>
             )}
 
-            {notesConcept && (
-              <div style={{ marginBottom: '14px', paddingBottom: '12px', borderBottom: '1px solid var(--border-subtle)' }}>
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px', flexWrap: 'wrap' }}>
-                  <div style={{ fontSize: '15px', fontWeight: 800, color: 'var(--primary-navy)' }}>
-                    {notesConcept.title}
-                  </div>
-                  <span style={{ fontSize: '12px', color: 'var(--text-light)', fontFamily: 'JetBrains Mono' }}>
-                    {formatTime(notesConcept.start_time)} - {formatTime(notesConcept.end_time)}
-                  </span>
-                </div>
-                <div style={{ fontSize: '13px', color: 'var(--text-muted)', marginTop: '4px', lineHeight: 1.45 }}>
-                  {notesConcept.description}
-                </div>
+            {!notesConcept ? (
+              <div style={{ padding: '28px 16px', textAlign: 'center', color: 'var(--text-muted)' }}>
+                {(lecture?.processing_status || lecture?.status) !== 'ready'
+                  ? `Extracting concepts and notes (${lecture?.processing_status || 'processing'}... ${lecture?.progress || 0}%)`
+                  : 'No concept segments available for this lecture.'}
               </div>
+            ) : (
+              <>
+                <div style={{ marginBottom: '14px', paddingBottom: '12px', borderBottom: '1px solid var(--border-subtle)' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px', flexWrap: 'wrap' }}>
+                    <div style={{ fontSize: '15px', fontWeight: 800, color: 'var(--primary-navy)' }}>
+                      {notesConcept.title}
+                    </div>
+                    <span style={{ fontSize: '12px', color: 'var(--text-light)', fontFamily: 'JetBrains Mono' }}>
+                      {formatTime(notesConcept.start_time)} - {formatTime(notesConcept.end_time)}
+                    </span>
+                  </div>
+                  <div style={{ fontSize: '13px', color: 'var(--text-muted)', marginTop: '4px', lineHeight: 1.45 }}>
+                    {notesConcept.description}
+                  </div>
+                </div>
+
+                {/* Core Concepts vs Confusing Topics */}
+                <div style={{ display: 'grid', gridTemplateColumns: isNarrow ? '1fr' : '1fr 1fr', gap: '14px' }}>
+                  <div style={{ background: '#F8FAFC', border: '1px solid #E2E8F0', borderRadius: 'var(--radius-md)', padding: '14px' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '10px' }}>
+                      <div style={{ width: '22px', height: '22px', borderRadius: '50%', background: '#ECFDF5', border: '1px solid #A7F3D0', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#059669', fontSize: '11px', fontWeight: 800 }}>
+                        ✓
+                      </div>
+                      <div>
+                        <h4 style={{ fontSize: '12px', fontWeight: 800, color: '#0F172A', margin: 0, textTransform: 'uppercase', letterSpacing: '0.4px' }}>
+                          1. Core Essential Concepts
+                        </h4>
+                        <span style={{ fontSize: '11px', color: '#64748B' }}>Key definitions & rules</span>
+                      </div>
+                    </div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                      {coreConceptsList.map((pt, pIdx) => (
+                        <div key={pIdx} style={{ display: 'flex', alignItems: 'flex-start', gap: '8px', fontSize: '12px', color: '#334155', lineHeight: 1.45, background: '#FFFFFF', border: '1px solid #F1F5F9', borderRadius: '6px', padding: '8px 10px' }}>
+                          <span style={{ color: '#10B981', fontWeight: 800, flexShrink: 0, marginTop: '1px' }}>•</span>
+                          <span>{pt}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div style={{ background: '#FFFBEB', border: '1px solid #FEF3C7', borderRadius: 'var(--radius-md)', padding: '14px' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '10px' }}>
+                      <div style={{ width: '22px', height: '22px', borderRadius: '50%', background: '#FEF3C7', border: '1px solid #FDE68A', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#D97706', fontSize: '11px', fontWeight: 800 }}>
+                        !
+                      </div>
+                      <div>
+                        <h4 style={{ fontSize: '12px', fontWeight: 800, color: '#92400E', margin: 0, textTransform: 'uppercase', letterSpacing: '0.4px' }}>
+                          2. Common Confusing Topics
+                        </h4>
+                        <span style={{ fontSize: '11px', color: '#B45309' }}>Cognitive traps & pitfalls</span>
+                      </div>
+                    </div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                      {confusingTopicsList.map((tr, tIdx) => (
+                        <div key={tIdx} style={{ display: 'flex', alignItems: 'flex-start', gap: '8px', fontSize: '12px', color: '#78350F', lineHeight: 1.45, background: '#FFFFFF', border: '1px solid #FEF3C7', borderRadius: '6px', padding: '8px 10px' }}>
+                          <span style={{ color: '#F59E0B', fontWeight: 800, flexShrink: 0, marginTop: '1px' }}>▲</span>
+                          <span>{tr}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              </>
             )}
-
-            {/* Core Concepts vs Confusing Topics */}
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '14px' }}>
-              <div style={{ background: '#F8FAFC', border: '1px solid #E2E8F0', borderRadius: 'var(--radius-md)', padding: '14px' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '10px' }}>
-                  <div style={{ width: '22px', height: '22px', borderRadius: '50%', background: '#ECFDF5', border: '1px solid #A7F3D0', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#059669', fontSize: '11px', fontWeight: 800 }}>
-                    ✓
-                  </div>
-                  <div>
-                    <h4 style={{ fontSize: '12px', fontWeight: 800, color: '#0F172A', margin: 0, textTransform: 'uppercase', letterSpacing: '0.4px' }}>
-                      1. Core Essential Concepts
-                    </h4>
-                    <span style={{ fontSize: '11px', color: '#64748B' }}>Key definitions & rules</span>
-                  </div>
-                </div>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                  {coreConceptsList.map((pt, pIdx) => (
-                    <div key={pIdx} style={{ display: 'flex', alignItems: 'flex-start', gap: '8px', fontSize: '12px', color: '#334155', lineHeight: 1.45, background: '#FFFFFF', border: '1px solid #F1F5F9', borderRadius: '6px', padding: '8px 10px' }}>
-                      <span style={{ color: '#10B981', fontWeight: 800, flexShrink: 0, marginTop: '1px' }}>•</span>
-                      <span>{pt}</span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-
-              <div style={{ background: '#FFFBEB', border: '1px solid #FEF3C7', borderRadius: 'var(--radius-md)', padding: '14px' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '10px' }}>
-                  <div style={{ width: '22px', height: '22px', borderRadius: '50%', background: '#FEF3C7', border: '1px solid #FDE68A', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#D97706', fontSize: '11px', fontWeight: 800 }}>
-                    !
-                  </div>
-                  <div>
-                    <h4 style={{ fontSize: '12px', fontWeight: 800, color: '#92400E', margin: 0, textTransform: 'uppercase', letterSpacing: '0.4px' }}>
-                      2. Common Confusing Topics
-                    </h4>
-                    <span style={{ fontSize: '11px', color: '#B45309' }}>Cognitive traps & pitfalls</span>
-                  </div>
-                </div>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                  {confusingTopicsList.map((tr, tIdx) => (
-                    <div key={tIdx} style={{ display: 'flex', alignItems: 'flex-start', gap: '8px', fontSize: '12px', color: '#78350F', lineHeight: 1.45, background: '#FFFFFF', border: '1px solid #FEF3C7', borderRadius: '6px', padding: '8px 10px' }}>
-                      <span style={{ color: '#F59E0B', fontWeight: 800, flexShrink: 0, marginTop: '1px' }}>▲</span>
-                      <span>{tr}</span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            </div>
           </div>
 
           {/* Interactive Concept Timeline */}
@@ -1226,8 +1526,9 @@ export const PlayerPage: React.FC<PlayerPageProps> = ({
           </div>
         </div>
 
-        {/* RIGHT AREA: Concept Checkpoint & Diagnostic Assessment */}
-        <div style={{ flex: '1 1 380px', minWidth: '340px' }}>
+        {/* RIGHT AREA: Concept Checkpoint & Diagnostic Assessment
+            (kept mounted when hidden, so answers and progress are never lost) */}
+        <div style={{ display: showAssessment ? 'block' : 'none', minWidth: isNarrow ? 0 : '340px' }}>
           {/* Top checkpoint toolbar */}
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
             <div style={{ fontSize: '13px', fontWeight: 800, color: 'var(--primary-navy)' }}>
@@ -1247,6 +1548,50 @@ export const PlayerPage: React.FC<PlayerPageProps> = ({
               </button>
             </div>
           </div>
+
+          {/* Prerequisite vs Lecture Checkpoints Tab Switcher (when rechecks exist) */}
+          {rechecks.length > 0 && (
+            <div style={{ display: 'flex', gap: '6px', marginBottom: '12px', background: 'var(--bg-subtle)', padding: '4px', borderRadius: 'var(--radius-md)' }}>
+              <button
+                type="button"
+                id="btn-tab-recheck"
+                onClick={() => setAssessmentMode('recheck')}
+                style={{
+                  flex: 1,
+                  padding: '6px 10px',
+                  borderRadius: 'var(--radius-sm)',
+                  fontSize: '11px',
+                  fontWeight: assessmentMode === 'recheck' ? 800 : 600,
+                  border: 'none',
+                  background: assessmentMode === 'recheck' ? 'var(--accent-purple)' : 'transparent',
+                  color: assessmentMode === 'recheck' ? '#FFFFFF' : 'var(--text-muted)',
+                  cursor: 'pointer',
+                  transition: 'all 0.15s ease'
+                }}
+              >
+                Prerequisite Re-Check ({rechecks.length})
+              </button>
+              <button
+                type="button"
+                id="btn-tab-checkpoints"
+                onClick={() => setAssessmentMode('checkpoints')}
+                style={{
+                  flex: 1,
+                  padding: '6px 10px',
+                  borderRadius: 'var(--radius-sm)',
+                  fontSize: '11px',
+                  fontWeight: assessmentMode === 'checkpoints' ? 800 : 600,
+                  border: 'none',
+                  background: assessmentMode === 'checkpoints' ? 'var(--accent-purple)' : 'transparent',
+                  color: assessmentMode === 'checkpoints' ? '#FFFFFF' : 'var(--text-muted)',
+                  cursor: 'pointer',
+                  transition: 'all 0.15s ease'
+                }}
+              >
+                Lecture Checkpoints ({allQuestions.length})
+              </button>
+            </div>
+          )}
 
           {/* CHECKPOINT AREA: Toggle between Question View and Completion Summary */}
           {showCompletionSummary ? (
@@ -1647,7 +1992,7 @@ export const PlayerPage: React.FC<PlayerPageProps> = ({
                 </div>
               </div>
             )
-          ) : !recheckSkipped && rechecks.length > 0 && activeRecheckIndex < rechecks.length ? (
+          ) : (rechecks.length > 0 && assessmentMode === 'recheck' && !recheckSkipped && activeRecheckIndex < rechecks.length) ? (
             /* ==============================================================
                Prerequisite Cross-Topic Re-Check Card
                ============================================================== */
@@ -1714,12 +2059,13 @@ export const PlayerPage: React.FC<PlayerPageProps> = ({
 
                     <button
                       type="button"
+                      id="btn-skip-to-lecture-questions"
                       className="btn btn-secondary btn-sm"
-                      style={{ fontSize: '12px', padding: '3px 10px' }}
+                      style={{ fontSize: '12px', padding: '4px 10px', display: 'flex', alignItems: 'center', gap: '4px' }}
                       onClick={handleSkipRecheck}
-                      title="Skip re-checking and continue to lecture checkpoints"
+                      title="Skip re-checking and continue directly to lecture checkpoints"
                     >
-                      <span>Skip for now</span>
+                      <span>Skip to lecture questions</span>
                       <ChevronRight size={13} />
                     </button>
                   </div>
@@ -1894,9 +2240,12 @@ export const PlayerPage: React.FC<PlayerPageProps> = ({
                             type="button"
                             className="btn btn-primary btn-sm"
                             style={{ fontSize: '12px' }}
-                            onClick={() => setRecheckSkipped(true)}
+                            onClick={() => {
+                              setRecheckSkipped(true);
+                              setAssessmentMode('checkpoints');
+                            }}
                           >
-                            <span>Proceed to Checkpoints</span>
+                            <span>Proceed to Lecture Checkpoints</span>
                             <ArrowRight size={13} />
                           </button>
                         )}
@@ -1921,7 +2270,7 @@ export const PlayerPage: React.FC<PlayerPageProps> = ({
                 </div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                   <span style={{ fontSize: '11px', fontWeight: 700, color: 'var(--accent-purple)', background: 'var(--accent-soft)', padding: '2px 8px', borderRadius: 'var(--radius-full)' }}>
-                    Question {activeQIndex + 1} of {allQuestions.length}
+                    {allQuestions.length > 0 ? `Question ${activeQIndex + 1} of ${allQuestions.length}` : '0 Questions'}
                   </span>
                   {currentQ && (
                     <span
@@ -2420,8 +2769,45 @@ export const PlayerPage: React.FC<PlayerPageProps> = ({
                   </div>
                 </div>
               ) : (
-                <div style={{ textAlign: 'center', padding: '24px 0', color: 'var(--text-muted)' }}>
-                  No questions found for this lecture.
+                <div style={{ textAlign: 'center', padding: '24px 16px' }}>
+                  {(lecture?.processing_status || lecture?.status) === 'generating' ? (
+                    <div>
+                      <RefreshCw size={18} style={{ animation: 'spin 2s linear infinite', marginBottom: '8px', color: '#2563EB' }} />
+                      <div style={{ fontSize: '13px', color: '#1E40AF', fontWeight: 600 }}>
+                        Generating checkpoint questions... ({lecture?.progress || 0}%)
+                      </div>
+                    </div>
+                  ) : concepts.length > 0 ? (
+                    <div>
+                      <FileQuestion size={32} color="var(--accent-purple)" style={{ marginBottom: '12px', opacity: 0.5 }} />
+                      <div style={{ fontSize: '14px', fontWeight: 700, color: 'var(--primary-navy)', marginBottom: '6px' }}>
+                        No diagnostic questions yet
+                      </div>
+                      <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '16px' }}>
+                        Questions are grounded in this lecture&apos;s transcript segments.
+                      </div>
+                      {regenerateError && (
+                        <div style={{ fontSize: '12px', color: '#DC2626', background: '#FEF2F2', border: '1px solid #FECACA', borderRadius: '6px', padding: '8px 12px', marginBottom: '12px' }}>
+                          {regenerateError}
+                        </div>
+                      )}
+                      <button
+                        type="button"
+                        id="btn-regenerate-questions"
+                        className="btn btn-primary btn-sm"
+                        onClick={handleRegenerateQuestions}
+                        disabled={regeneratingQuestions}
+                        style={{ fontSize: '13px', display: 'inline-flex', alignItems: 'center', gap: '6px' }}
+                      >
+                        {regeneratingQuestions
+                          ? <RefreshCw size={13} style={{ animation: 'spin 2s linear infinite' }} />
+                          : <Sparkles size={13} />}
+                        <span>{regeneratingQuestions ? 'Generating…' : 'Regenerate Questions'}</span>
+                      </button>
+                    </div>
+                  ) : (
+                    <div style={{ fontSize: '13px', color: 'var(--text-muted)' }}>No questions found for this lecture.</div>
+                  )}
                 </div>
               )}
             </div>

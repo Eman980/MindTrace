@@ -14,7 +14,9 @@ import {
   RefreshCw,
   KeyRound,
   ArrowLeft,
-  Sparkles
+  Sparkles,
+  GraduationCap,
+  School
 } from 'lucide-react';
 
 interface AuthPageProps {
@@ -31,6 +33,7 @@ export const AuthPage: React.FC<AuthPageProps> = ({
   onSwitchMode
 }) => {
   const [mode, setMode] = useState<'login' | 'signup' | 'forgot-password' | 'reset-password'>(initialMode);
+  const [role, setRole] = useState<'student' | 'teacher'>('student');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
@@ -116,7 +119,7 @@ export const AuthPage: React.FC<AuthPageProps> = ({
       if (mode === 'login') {
         await login(cleanEmail, password);
       } else {
-        await signup(cleanEmail, password, fullName.trim());
+        await signup(cleanEmail, password, fullName.trim(), role);
       }
       if (onSuccess) onSuccess();
       if (setActiveTab) setActiveTab('dashboard');
@@ -368,24 +371,95 @@ export const AuthPage: React.FC<AuthPageProps> = ({
         {(mode === 'login' || mode === 'signup') && (
           <form onSubmit={handleLoginOrSignup}>
             {mode === 'signup' && (
-              <div className="form-group" style={{ marginBottom: '16px' }}>
-                <label className="form-label" style={{ display: 'block', fontSize: '13px', fontWeight: 600, color: 'var(--navy-800)', marginBottom: '6px' }}>
-                  Full Name
-                </label>
-                <div style={{ position: 'relative' }}>
-                  <UserIcon size={16} color="var(--text-light)" style={{ position: 'absolute', left: '12px', top: '13px' }} />
-                  <input
-                    id="auth-fullname-input"
-                    type="text"
-                    className="input-field"
-                    placeholder="e.g. Alex Chen"
-                    value={fullName}
-                    onChange={(e) => setFullName(e.target.value)}
-                    style={{ width: '100%', padding: '10px 14px 10px 36px', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-subtle)', fontSize: '14px' }}
-                    disabled={submitting}
-                  />
+              <>
+                {/* Role Selector: Student vs Teacher */}
+                <div className="form-group" style={{ marginBottom: '16px' }}>
+                  <label
+                    style={{
+                      display: 'block',
+                      fontSize: '13px',
+                      fontWeight: 600,
+                      color: 'var(--navy-800)',
+                      marginBottom: '6px',
+                    }}
+                  >
+                    I am registering as:
+                  </label>
+                  <div
+                    style={{
+                      display: 'grid',
+                      gridTemplateColumns: '1fr 1fr',
+                      gap: '10px',
+                    }}
+                  >
+                    <button
+                      id="role-select-student-btn"
+                      type="button"
+                      onClick={() => setRole('student')}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        gap: '8px',
+                        padding: '10px 14px',
+                        borderRadius: 'var(--radius-md)',
+                        border: role === 'student' ? '2px solid var(--primary-accent)' : '1px solid var(--border-subtle)',
+                        background: role === 'student' ? 'var(--accent-soft)' : '#FFFFFF',
+                        color: role === 'student' ? 'var(--primary-accent)' : 'var(--navy-800)',
+                        fontWeight: role === 'student' ? 700 : 500,
+                        fontSize: '13px',
+                        cursor: 'pointer',
+                        transition: 'all 0.15s ease',
+                      }}
+                    >
+                      <GraduationCap size={16} />
+                      <span>Student</span>
+                    </button>
+                    <button
+                      id="role-select-teacher-btn"
+                      type="button"
+                      onClick={() => setRole('teacher')}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        gap: '8px',
+                        padding: '10px 14px',
+                        borderRadius: 'var(--radius-md)',
+                        border: role === 'teacher' ? '2px solid #4f46e5' : '1px solid var(--border-subtle)',
+                        background: role === 'teacher' ? 'rgba(79, 70, 229, 0.1)' : '#FFFFFF',
+                        color: role === 'teacher' ? '#4f46e5' : 'var(--navy-800)',
+                        fontWeight: role === 'teacher' ? 700 : 500,
+                        fontSize: '13px',
+                        cursor: 'pointer',
+                        transition: 'all 0.15s ease',
+                      }}
+                    >
+                      <School size={16} />
+                      <span>Teacher / Instructor</span>
+                    </button>
+                  </div>
                 </div>
-              </div>
+
+                <div className="form-group" style={{ marginBottom: '16px' }}>
+                  <label className="form-label" style={{ display: 'block', fontSize: '13px', fontWeight: 600, color: 'var(--navy-800)', marginBottom: '6px' }}>
+                    Full Name
+                  </label>
+                  <div style={{ position: 'relative' }}>
+                    <UserIcon size={16} color="var(--text-light)" style={{ position: 'absolute', left: '12px', top: '13px' }} />
+                    <input
+                      id="auth-fullname-input"
+                      type="text"
+                      className="input-field"
+                      placeholder="e.g. Alex Chen"
+                      value={fullName}
+                      onChange={(e) => setFullName(e.target.value)}
+                      style={{ width: '100%', padding: '10px 14px 10px 36px', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-subtle)', fontSize: '14px' }}
+                      disabled={submitting}
+                    />
+                  </div>
+                </div>
+              </>
             )}
 
             <div className="form-group" style={{ marginBottom: '16px' }}>

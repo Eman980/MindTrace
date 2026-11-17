@@ -2,7 +2,7 @@ export interface User {
   id: number;
   email: string;
   full_name: string;
-  role: string;
+  role: 'student' | 'teacher' | string;
   created_at: string;
 }
 
@@ -140,11 +140,15 @@ export interface MediaFile {
 export interface Lecture {
   id: number;
   title: string;
-  course_code: string;
+  course_code?: string | null;
+  course_id?: number | null;
   description?: string;
   duration_seconds: number;
   media_type: 'video' | 'audio';
   status: 'processing' | 'ready' | 'failed';
+  processing_status?: 'uploaded' | 'transcribing' | 'segmenting' | 'generating' | 'ready' | 'failed' | string;
+  progress?: number;
+  error_message?: string | null;
   processing_error?: string;
   is_demo: boolean;
   prerequisite_lecture_id?: number | null;
@@ -170,9 +174,9 @@ export interface MisconceptionEvidence {
 export interface Misconception {
   id: number;
   user_id: number;
-  lecture_id: number;
+  lecture_id?: number | null;
   lecture_title?: string;
-  concept_id: number;
+  concept_id?: number | null;
   concept_name: string;
   title: string;
   summary?: string;
@@ -181,6 +185,8 @@ export interface Misconception {
   concept_start_time?: number;
   concept_end_time?: number;
   severity_score: number;
+  current_score?: number;
+  peak_score?: number;
   severity_level: 'Low' | 'Medium' | 'High';
   occurrence_count: number;
   status: 'Unresolved' | 'Needs Review' | 'In Progress' | 'Resolved' | string;
@@ -195,6 +201,7 @@ export interface Misconception {
   improving_at?: string;
   recheck_due?: string;
   relapse_count?: number;
+  is_archived?: boolean;
   root_cause_concept?: string;
   root_cause_lecture_title?: string;
   root_cause_lecture_id?: number;
@@ -249,22 +256,6 @@ export interface ReprobeItem {
   reprobe_checkpoint?: Checkpoint;
 }
 
-export interface LedgerAttempt {
-  id: number;
-  checkpoint_id: number;
-  is_correct: boolean;
-  confidence_level?: number;
-  explanation_text?: string;
-  explanation_verdict?: string;
-  created_at: string;
-}
-
-export interface MisconceptionLedgerItem extends Misconception {
-  remediation_start_time?: number;
-  remediation_end_time?: number;
-  attempts: LedgerAttempt[];
-}
-
 export interface PrerequisiteRecheckQuestion {
   id: number;
   concept_id: number;
@@ -308,10 +299,10 @@ export interface MisconceptionAttemptHistoryItem {
 
 export interface MisconceptionDetail {
   id: number;
-  concept_id: number;
+  concept_id?: number | null;
   concept_name: string;
-  lecture_id: number;
-  lecture_title: string;
+  lecture_id?: number | null;
+  lecture_title?: string;
   why_detected: string;
   original_question: string;
   student_wrong_answer: string;
@@ -325,10 +316,100 @@ export interface MisconceptionDetail {
   status: string;
   severity_level: string;
   severity_score: number;
+  current_score?: number;
+  peak_score?: number;
   improving_at?: string;
   recheck_due?: string;
   next_reassessment_info?: string;
   relapse_count: number;
+  is_archived?: boolean;
   resolved_at?: string;
   assessment_history: MisconceptionAttemptHistoryItem[];
+}
+
+// ─── Concept-wise progress (canonical concepts across videos) ────────────────
+export interface CanonicalVideoProgress {
+  lecture_id: number;
+  lecture_title: string;
+  concept_id: number;
+  start_time: number;
+  end_time: number;
+  questions_attempted: number;
+  questions_correct: number;
+}
+
+export interface CanonicalConceptProgress {
+  id: number;
+  name: string;
+  questions_attempted: number;
+  questions_correct: number;
+  open_misconceptions: number;
+  understanding_percentage: number;
+  status: 'Not Started' | 'Needs Attention' | 'Improving' | 'Mastered';
+  videos: CanonicalVideoProgress[];
+}
+
+// ─── Teacher Courses (Teacher Insights Phase 2) ─────────────────────────────
+export interface Course {
+  id: number;
+  teacher_id: number;
+  title: string;
+  course_code?: string | null;
+  description?: string | null;
+  join_code: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CourseCreateIn {
+  title: string;
+  course_code?: string;
+  description?: string;
+}
+
+export interface CourseUpdateIn {
+  title?: string;
+  course_code?: string;
+  description?: string;
+}
+
+// ─── Student Courses & Consent (Teacher Insights Phase 3) ───────────────────
+export interface CoursePreviewIn {
+  join_code: string;
+}
+
+export interface CoursePreview {
+  course_id: number;
+  title: string;
+  course_code?: string | null;
+  description?: string | null;
+  teacher_name: string;
+  already_enrolled: boolean;
+  enrollment_status?: string | null;
+}
+
+export interface CourseJoinIn {
+  join_code: string;
+  consent_granted: boolean;
+}
+
+export interface StudentEnrollment {
+  id: number;
+  course_id: number;
+  title: string;
+  course_code?: string | null;
+  description?: string | null;
+  teacher_name: string;
+  consent_granted: boolean;
+  status: string;
+  consent_at?: string | null;
+  created_at: string;
+  associated_lectures_count: number;
+}
+
+export interface AssociatedLecture {
+  id: number;
+  title: string;
+  course_code?: string | null;
+  created_at?: string;
 }

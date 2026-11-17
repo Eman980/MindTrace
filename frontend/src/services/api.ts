@@ -10,31 +10,44 @@ import type {
   Concept,
   User,
   ReprobeItem,
-  MisconceptionLedgerItem,
   PrerequisiteRecheck,
   PrerequisiteRecheckSubmitResult,
   MisconceptionDetail,
+  CanonicalConceptProgress,
+  Course,
+  CourseCreateIn,
+  CourseUpdateIn,
+  CoursePreview,
+  CoursePreviewIn,
+  CourseJoinIn,
+  StudentEnrollment,
+  AssociatedLecture,
 } from '../types';
 
-const API_BASE = 'http://127.0.0.1:8000/api/v1';
+// Backend API URL
+const API_BASE = 'http://127.0.0.1:8001/api/v1';
 
 function getAuthHeader(): Record<string, string> {
   const token = localStorage.getItem('mindtrace_token');
   return token ? { Authorization: `Bearer ${token}` } : {};
 }
 
-async function request<T>(endpoint: string, options: RequestInit = {}): Promise<T> {
+async function request<T>(
+  endpoint: string,
+  options: RequestInit = {}
+): Promise<T> {
   const headers: Record<string, string> = {
     ...getAuthHeader(),
     ...(options.headers as Record<string, string> || {}),
   };
 
-  // Only set Content-Type to application/json if body is not FormData
+  // Do not set JSON Content-Type for FormData uploads
   if (!(options.body instanceof FormData) && !headers['Content-Type']) {
     headers['Content-Type'] = 'application/json';
   }
 
   let response: Response;
+
   try {
     response = await fetch(`${API_BASE}${endpoint}`, {
       ...options,
@@ -42,15 +55,22 @@ async function request<T>(endpoint: string, options: RequestInit = {}): Promise<
     });
   } catch (networkErr: any) {
     console.error('[API Network Error]', networkErr);
-    throw new Error('Server connection error. Unable to connect to the MindTrace backend. Please ensure the backend is running at http://127.0.0.1:8000.');
+
+    throw new Error(
+      'Server connection error. Unable to connect to the MindTrace backend. Please ensure the backend is running at http://127.0.0.1:8001.'
+    );
   }
 
   if (!response.ok) {
     let errorDetail = 'An unexpected error occurred.';
+
     try {
       const errJson = await response.json();
+
       if (Array.isArray(errJson.detail)) {
-        errorDetail = errJson.detail.map((e: any) => e.msg || JSON.stringify(e)).join(', ');
+        errorDetail = errJson.detail
+          .map((e: any) => e.msg || JSON.stringify(e))
+          .join(', ');
       } else if (typeof errJson.detail === 'string') {
         errorDetail = errJson.detail;
       } else if (errJson.message) {
@@ -59,6 +79,7 @@ async function request<T>(endpoint: string, options: RequestInit = {}): Promise<
     } catch {
       errorDetail = await response.text() || response.statusText;
     }
+
     throw new Error(errorDetail);
   }
 
@@ -67,16 +88,23 @@ async function request<T>(endpoint: string, options: RequestInit = {}): Promise<
 
 export const api = {
   auth: {
-    signup: (data: { email: string; password: string; full_name: string }) =>
+    signup: (data: {
+      email: string;
+      password: string;
+      full_name: string;
+      role?: string;
+    }) =>
       request<AuthResponse>('/auth/signup', {
         method: 'POST',
         body: JSON.stringify(data),
       }),
+
     login: (data: { email: string; password: string }) =>
       request<AuthResponse>('/auth/login', {
         method: 'POST',
         body: JSON.stringify(data),
       }),
+
     forgotPassword: (data: { email: string }) =>
       request<{
         success: boolean;
@@ -88,7 +116,12 @@ export const api = {
         method: 'POST',
         body: JSON.stringify(data),
       }),
-    resetPassword: (data: { token: string; new_password: string; confirm_password: string }) =>
+
+    resetPassword: (data: {
+      token: string;
+      new_password: string;
+      confirm_password: string;
+    }) =>
       request<{
         success: boolean;
         message: string;
@@ -96,6 +129,7 @@ export const api = {
         method: 'POST',
         body: JSON.stringify(data),
       }),
+
     getMe: () => request<User>('/auth/me'),
   },
 
@@ -105,7 +139,9 @@ export const api = {
 
   lectures: {
     list: () => request<Lecture[]>('/lectures'),
+
     get: (id: number) => request<Lecture>(`/lectures/${id}`),
+
     update: (
       id: number,
       data: {
@@ -128,16 +164,32 @@ export const api = {
         method: 'PATCH',
         body: JSON.stringify(data),
       }),
-    rename: (id: number, data: string | { title: string; description?: string; course_code?: string }) => {
+
+    rename: (
+      id: number,
+      data:
+        | string
+        | {
+            title: string;
+            description?: string;
+            course_code?: string;
+          }
+    ) => {
       const payload = typeof data === 'string' ? { title: data } : data;
-      return request<{ success: boolean; message: string; id: number; title: string; course_code?: string; description?: string }>(
-        `/lectures/${id}/rename`,
-        {
-          method: 'PATCH',
-          body: JSON.stringify(payload),
-        }
-      );
+
+      return request<{
+        success: boolean;
+        message: string;
+        id: number;
+        title: string;
+        course_code?: string;
+        description?: string;
+      }>(`/lectures/${id}/rename`, {
+        method: 'PATCH',
+        body: JSON.stringify(payload),
+      });
     },
+
     upload: (formData: FormData) =>
       request<{
         success: boolean;
@@ -150,37 +202,69 @@ export const api = {
         is_duplicate?: boolean;
         quality_warning?: string | null;
         message?: string;
-      }>(
-        '/lectures/upload',
-        {
-          method: 'POST',
-          body: formData,
-        }
-      ),
+      }>('/lectures/upload', {
+        method: 'POST',
+        body: formData,
+      }),
+
     delete: (id: number) =>
-      request<{ success: boolean; message: string }>(`/lectures/${id}`, {
-        method: 'DELETE',
-      }),
+      request<{ success: boolean; message: string }>(
+        `/lectures/${id}`,
+        { method: 'DELETE' }
+      ),
+
     deleteAll: () =>
-      request<{ success: boolean; message: string; deleted_count: number }>('/lectures/all', {
+      request<{
+        success: boolean;
+        message: string;
+        deleted_count: number;
+      }>('/lectures/all', {
         method: 'DELETE',
       }),
-    getMediaUrl: (lectureId: number) => `${API_BASE}/lectures/${lectureId}/media`,
+
+    getMediaUrl: (lectureId: number) =>
+      `${API_BASE}/lectures/${lectureId}/media`,
+
     getRechecks: (lectureId: number) =>
-      request<PrerequisiteRecheck[]>(`/lectures/${lectureId}/rechecks`),
+      request<PrerequisiteRecheck[]>(
+        `/lectures/${lectureId}/rechecks`
+      ),
+
     submitRecheck: (
       lectureId: number,
-      data: { misconception_id: number; checkpoint_id: number; student_answer: string }
+      data: {
+        misconception_id: number;
+        checkpoint_id: number;
+        student_answer: string;
+      }
     ) =>
-      request<PrerequisiteRecheckSubmitResult>(`/lectures/${lectureId}/rechecks/submit`, {
+      request<PrerequisiteRecheckSubmitResult>(
+        `/lectures/${lectureId}/rechecks/submit`,
+        {
+          method: 'POST',
+          body: JSON.stringify(data),
+        }
+      ),
+
+    regenerateCheckpoints: (lectureId: number) =>
+      request<{
+        success: boolean;
+        message: string;
+        lecture_id: number;
+        checkpoints_count: number;
+      }>(`/lectures/${lectureId}/regenerate-checkpoints`, {
         method: 'POST',
-        body: JSON.stringify(data),
       }),
   },
 
   concepts: {
+    getCanonicalProgress: () =>
+      request<CanonicalConceptProgress[]>('/canonical/progress'),
+
     getProgress: () => request<Concept[]>('/concepts/progress'),
-    getDetail: (id: number) => request<Concept>(`/concepts/${id}`),
+
+    getDetail: (id: number) =>
+      request<Concept>(`/concepts/${id}`),
   },
 
   checkpoints: {
@@ -204,10 +288,15 @@ export const api = {
       timestamp_in_media: number;
       details?: Record<string, any>;
     }) =>
-      request<{ recorded: boolean; replay_signal_triggered: boolean; message: string }>('/playback/event', {
+      request<{
+        recorded: boolean;
+        replay_signal_triggered: boolean;
+        message: string;
+      }>('/playback/event', {
         method: 'POST',
         body: JSON.stringify(data),
       }),
+
     markUnresolved: (data: {
       lecture_id: number;
       concept_id: number;
@@ -227,23 +316,51 @@ export const api = {
   },
 
   misconceptions: {
-    list: (params?: { priority?: string; status_filter?: string }) => {
+    list: (params?: {
+      priority?: string;
+      status_filter?: string;
+    }) => {
       const searchParams = new URLSearchParams();
+
       if (params?.priority && params.priority !== 'All') {
         searchParams.append('priority', params.priority);
       }
+
       if (params?.status_filter && params.status_filter !== 'All') {
         searchParams.append('status_filter', params.status_filter);
       }
-      const query = searchParams.toString() ? `?${searchParams.toString()}` : '';
-      return request<Misconception[]>(`/misconceptions${query}`);
+
+      const query = searchParams.toString()
+        ? `?${searchParams.toString()}`
+        : '';
+
+      return request<Misconception[]>(
+        `/misconceptions${query}`
+      );
     },
+
     stats: () => request<MisconceptionStats>('/misconceptions/stats'),
-    getLedger: () => request<MisconceptionLedgerItem[]>('/misconceptions/ledger'),
-    getReprobe: () => request<ReprobeItem[]>('/misconceptions/reprobe'),
-    getReview: (id: number) => request<MisconceptionReviewData>(`/misconceptions/${id}/review`),
-    getDetails: (id: number) => request<MisconceptionDetail>(`/misconceptions/${id}/details`),
-    resolve: (id: number, data: { checkpoint_id: number; student_answer: string }) =>
+
+    getReprobe: () =>
+      request<ReprobeItem[]>('/misconceptions/reprobe'),
+
+    getReview: (id: number) =>
+      request<MisconceptionReviewData>(
+        `/misconceptions/${id}/review`
+      ),
+
+    getDetails: (id: number) =>
+      request<MisconceptionDetail>(
+        `/misconceptions/${id}/details`
+      ),
+
+    resolve: (
+      id: number,
+      data: {
+        checkpoint_id: number;
+        student_answer: string;
+      }
+    ) =>
       request<{
         is_correct: boolean;
         feedback_reason: string;
@@ -255,6 +372,7 @@ export const api = {
         method: 'POST',
         body: JSON.stringify(data),
       }),
+
     updateStatus: (id: number, status: string) =>
       request<{
         success: boolean;
@@ -269,34 +387,99 @@ export const api = {
         method: 'PATCH',
         body: JSON.stringify({ status }),
       }),
+
     downloadEvidenceCsv: async () => {
       const headers = getAuthHeader();
-      const response = await fetch(`${API_BASE}/misconceptions/export-evidence`, {
-        headers,
-      });
+
+      const response = await fetch(
+        `${API_BASE}/misconceptions/export-evidence`,
+        { headers }
+      );
+
       if (!response.ok) {
         throw new Error('Failed to download evidence CSV');
       }
+
       const blob = await response.blob();
       const url = window.URL.createObjectURL(blob);
       const a = document.createElement('a');
+
       a.href = url;
-      a.download = `mindtrace_evidence_${new Date().toISOString().slice(0, 10)}.csv`;
+      a.download = `mindtrace_evidence_${new Date()
+        .toISOString()
+        .slice(0, 10)}.csv`;
+
       document.body.appendChild(a);
       a.click();
       a.remove();
+
       window.URL.revokeObjectURL(url);
     },
   },
 
   demo: {
     seed: () =>
-      request<{ success: boolean; message: string; lecture_id: number; title: string }>('/demo/seed', {
+      request<{
+        success: boolean;
+        message: string;
+        lecture_id: number;
+        title: string;
+      }>('/demo/seed', {
         method: 'POST',
       }),
+
     resetSample: () =>
-      request<{ success: boolean; message: string; lecture_id: number; title: string }>('/demo/reset-sample', {
+      request<{
+        success: boolean;
+        message: string;
+        lecture_id: number;
+        title: string;
+      }>('/demo/reset-sample', {
         method: 'POST',
       }),
+  },
+
+  teacher: {
+    courses: {
+      list: () => request<Course[]>('/teacher/courses'),
+      get: (courseId: number) => request<Course>(`/teacher/courses/${courseId}`),
+      create: (data: CourseCreateIn) =>
+        request<Course>('/teacher/courses', {
+          method: 'POST',
+          body: JSON.stringify(data),
+        }),
+      update: (courseId: number, data: CourseUpdateIn) =>
+        request<Course>(`/teacher/courses/${courseId}`, {
+          method: 'PATCH',
+          body: JSON.stringify(data),
+        }),
+      delete: (courseId: number) =>
+        request<{ success: boolean; message: string }>(`/teacher/courses/${courseId}`, {
+          method: 'DELETE',
+        }),
+    },
+  },
+
+  student: {
+    courses: {
+      preview: (data: CoursePreviewIn) =>
+        request<CoursePreview>('/student/courses/preview', {
+          method: 'POST',
+          body: JSON.stringify(data),
+        }),
+      join: (data: CourseJoinIn) =>
+        request<StudentEnrollment>('/student/courses/join', {
+          method: 'POST',
+          body: JSON.stringify(data),
+        }),
+      list: () => request<StudentEnrollment[]>('/student/courses'),
+      withdraw: (courseId: number) =>
+        request<{ message: string; course_id: number; status: string }>(
+          `/student/courses/${courseId}/withdraw`,
+          { method: 'POST' }
+        ),
+      getAssociatedLectures: (courseId: number) =>
+        request<AssociatedLecture[]>(`/student/courses/${courseId}/associated-lectures`),
+    },
   },
 };

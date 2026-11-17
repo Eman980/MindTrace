@@ -229,7 +229,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({ setActiveTab }) => {
               4
             </div>
             <h3 style={{ fontSize: '18px', fontWeight: 700, marginBottom: '8px', color: 'var(--navy-800)' }}>
-              Review & Ledger Resolution
+             Review & Resolution
             </h3>
             <p style={{ fontSize: '14px', color: 'var(--text-muted)', lineHeight: 1.5 }}>
               Review identified misconceptions with targeted explanations, spaced transfer probes, and verifiable evidence resolution.

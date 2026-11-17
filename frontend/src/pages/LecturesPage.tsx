@@ -308,7 +308,7 @@ export const LecturesPage: React.FC<LecturesPageProps> = ({ setActiveTab, onSele
                       borderRadius: 'var(--radius-full)',
                     }}
                   >
-                    {lec.course_code || 'CS101'}
+                    {lec.course_code || 'Independent Study'}
                   </span>
                   {lec.is_demo && (
                     <span

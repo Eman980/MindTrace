@@ -9,10 +9,11 @@ import {
   TrendingUp,
   LogOut,
   User as UserIcon,
-  BookOpen,
   ArrowRight,
   Menu,
-  X
+  X,
+  School,
+  GraduationCap
 } from 'lucide-react';
 
 interface NavbarProps {
@@ -74,85 +75,101 @@ export const Navbar: React.FC<NavbarProps> = ({
 
         {/* Desktop Navigation */}
         {user ? (
-          <nav className="nav-desktop">
-            <ul className="nav-links">
-              <li>
-                <button
-                  id="nav-dashboard-btn"
-                  className={`nav-item-btn ${activeTab === 'dashboard' ? 'active' : ''}`}
-                  onClick={() => handleNavigate('dashboard')}
-                >
-                  <LayoutDashboard size={16} />
-                  <span>Dashboard</span>
-                </button>
-              </li>
-              <li>
-                <button
-                  id="nav-lectures-btn"
-                  className={`nav-item-btn ${activeTab === 'lectures' ? 'active' : ''}`}
-                  onClick={() => handleNavigate('lectures')}
-                >
-                  <Video size={16} />
-                  <span>My Lectures</span>
-                </button>
-              </li>
-              <li>
-                <button
-                  id="nav-upload-btn"
-                  className={`nav-item-btn ${activeTab === 'upload' ? 'active' : ''}`}
-                  onClick={() => handleNavigate('upload')}
-                >
-                  <Upload size={16} />
-                  <span>Upload</span>
-                </button>
-              </li>
-              <li>
-                <button
-                  id="nav-misconceptions-btn"
-                  className={`nav-item-btn ${activeTab === 'misconceptions' ? 'active' : ''}`}
-                  onClick={() => handleNavigate('misconceptions')}
-                >
-                  <AlertTriangle size={16} />
-                  <span>Misconceptions</span>
-                  {unresolvedCount > 0 && (
-                    <span
-                      style={{
-                        background: 'var(--priority-high-bg)',
-                        color: 'var(--priority-high-text)',
-                        fontSize: '11px',
-                        padding: '1px 6px',
-                        borderRadius: '9999px',
-                        fontWeight: 700,
-                      }}
-                    >
-                      {unresolvedCount}
-                    </span>
-                  )}
-                </button>
-              </li>
-              <li>
-                <button
-                  id="nav-ledger-btn"
-                  className={`nav-item-btn ${activeTab === 'ledger' ? 'active' : ''}`}
-                  onClick={() => handleNavigate('ledger')}
-                  title="Evidence-based Misconception Ledger"
-                >
-                  <BookOpen size={16} />
-                  <span>Ledger</span>
-                </button>
-              </li>
-              <li>
-                <button
-                  id="nav-progress-btn"
-                  className={`nav-item-btn ${activeTab === 'progress' ? 'active' : ''}`}
-                  onClick={() => handleNavigate('progress')}
-                >
-                  <TrendingUp size={16} />
-                  <span>Progress</span>
-                </button>
-              </li>
-            </ul>
-          </nav>
+          user.role === 'teacher' ? (
+            <nav className="nav-desktop">
+              <ul className="nav-links">
+                <li>
+                  <button
+                    id="nav-teacher-dashboard-btn"
+                    className={`nav-item-btn ${activeTab === 'teacher-dashboard' || activeTab === 'dashboard' ? 'active' : ''}`}
+                    onClick={() => handleNavigate('teacher-dashboard')}
+                  >
+                    <School size={16} />
+                    <span>Teacher Workspace</span>
+                  </button>
+                </li>
+              </ul>
+            </nav>
+          ) : (
+            <nav className="nav-desktop">
+              <ul className="nav-links">
+                <li>
+                  <button
+                    id="nav-dashboard-btn"
+                    className={`nav-item-btn ${activeTab === 'dashboard' ? 'active' : ''}`}
+                    onClick={() => handleNavigate('dashboard')}
+                  >
+                    <LayoutDashboard size={16} />
+                    <span>Dashboard</span>
+                  </button>
+                </li>
+                <li>
+                  <button
+                    id="nav-lectures-btn"
+                    className={`nav-item-btn ${activeTab === 'lectures' ? 'active' : ''}`}
+                    onClick={() => handleNavigate('lectures')}
+                  >
+                    <Video size={16} />
+                    <span>My Lectures</span>
+                  </button>
+                </li>
+                <li>
+                  <button
+                    id="nav-upload-btn"
+                    className={`nav-item-btn ${activeTab === 'upload' ? 'active' : ''}`}
+                    onClick={() => handleNavigate('upload')}
+                  >
+                    <Upload size={16} />
+                    <span>Upload</span>
+                  </button>
+                </li>
+                <li>
+                  <button
+                    id="nav-misconceptions-btn"
+                    className={`nav-item-btn ${activeTab === 'misconceptions' ? 'active' : ''}`}
+                    onClick={() => handleNavigate('misconceptions')}
+                  >
+                    <AlertTriangle size={16} />
+                    <span>Misconceptions</span>
+                    {unresolvedCount > 0 && (
+                      <span
+                        style={{
+                          background: 'var(--priority-high-bg)',
+                          color: 'var(--priority-high-text)',
+                          fontSize: '11px',
+                          padding: '1px 6px',
+                          borderRadius: '9999px',
+                          fontWeight: 700,
+                        }}
+                      >
+                        {unresolvedCount}
+                      </span>
+                    )}
+                  </button>
+                </li>
+                <li>
+                  <button
+                    id="nav-progress-btn"
+                    className={`nav-item-btn ${activeTab === 'progress' ? 'active' : ''}`}
+                    onClick={() => handleNavigate('progress')}
+                  >
+                    <TrendingUp size={16} />
+                    <span>Progress</span>
+                  </button>
+                </li>
+                <li>
+                  <button
+                    id="nav-courses-btn"
+                    className={`nav-item-btn ${activeTab === 'courses' ? 'active' : ''}`}
+                    onClick={() => handleNavigate('courses')}
+                  >
+                    <GraduationCap size={16} />
+                    <span>My Courses</span>
+                  </button>
+                </li>
+              </ul>
+            </nav>
+          )
         ) : (
           <nav className="nav-desktop">
             <ul className="nav-links">
@@ -187,6 +204,37 @@ export const Navbar: React.FC<NavbarProps> = ({
               >
                 <UserIcon size={14} />
                 <span>{user.full_name}</span>
+                {user.role === 'teacher' ? (
+                  <span
+                    style={{
+                      fontSize: '10px',
+                      fontWeight: 700,
+                      padding: '2px 6px',
+                      borderRadius: '4px',
+                      background: 'rgba(79, 70, 229, 0.15)',
+                      color: '#4f46e5',
+                      letterSpacing: '0.04em',
+                      textTransform: 'uppercase',
+                    }}
+                  >
+                    Instructor
+                  </span>
+                ) : (
+                  <span
+                    style={{
+                      fontSize: '10px',
+                      fontWeight: 700,
+                      padding: '2px 6px',
+                      borderRadius: '4px',
+                      background: 'var(--accent-soft)',
+                      color: 'var(--primary-accent)',
+                      letterSpacing: '0.04em',
+                      textTransform: 'uppercase',
+                    }}
+                  >
+                    Student
+                  </span>
+                )}
               </div>
               <button
                 id="btn-logout"
@@ -255,73 +303,98 @@ export const Navbar: React.FC<NavbarProps> = ({
                 <span style={{ fontSize: '13px', fontWeight: 700, color: 'var(--navy-800)' }}>
                   {user.full_name}
                 </span>
+                <span
+                  style={{
+                    fontSize: '10px',
+                    fontWeight: 700,
+                    padding: '1px 5px',
+                    borderRadius: '4px',
+                    background: user.role === 'teacher' ? 'rgba(79, 70, 229, 0.15)' : 'var(--accent-soft)',
+                    color: user.role === 'teacher' ? '#4f46e5' : 'var(--primary-accent)',
+                    textTransform: 'uppercase',
+                  }}
+                >
+                  {user.role === 'teacher' ? 'Instructor' : 'Student'}
+                </span>
                 <span style={{ fontSize: '11px', color: 'var(--text-muted)', marginLeft: 'auto' }}>
                   {user.email}
                 </span>
               </div>
 
-              <button
-                className={`nav-item-btn ${activeTab === 'dashboard' ? 'active' : ''}`}
-                onClick={() => handleNavigate('dashboard')}
-              >
-                <LayoutDashboard size={16} />
-                <span>Dashboard</span>
-              </button>
-
-              <button
-                className={`nav-item-btn ${activeTab === 'lectures' ? 'active' : ''}`}
-                onClick={() => handleNavigate('lectures')}
-              >
-                <Video size={16} />
-                <span>My Lectures</span>
-              </button>
-
-              <button
-                className={`nav-item-btn ${activeTab === 'upload' ? 'active' : ''}`}
-                onClick={() => handleNavigate('upload')}
-              >
-                <Upload size={16} />
-                <span>Upload Lecture</span>
-              </button>
-
-              <button
-                className={`nav-item-btn ${activeTab === 'misconceptions' ? 'active' : ''}`}
-                onClick={() => handleNavigate('misconceptions')}
-              >
-                <AlertTriangle size={16} />
-                <span>Misconceptions</span>
-                {unresolvedCount > 0 && (
-                  <span
-                    style={{
-                      background: 'var(--priority-high-bg)',
-                      color: 'var(--priority-high-text)',
-                      fontSize: '11px',
-                      padding: '1px 6px',
-                      borderRadius: '9999px',
-                      fontWeight: 700,
-                      marginLeft: 'auto',
-                    }}
+              {user.role === 'teacher' ? (
+                <button
+                  className={`nav-item-btn ${activeTab === 'teacher-dashboard' || activeTab === 'dashboard' ? 'active' : ''}`}
+                  onClick={() => handleNavigate('teacher-dashboard')}
+                >
+                  <School size={16} />
+                  <span>Teacher Workspace</span>
+                </button>
+              ) : (
+                <>
+                  <button
+                    className={`nav-item-btn ${activeTab === 'dashboard' ? 'active' : ''}`}
+                    onClick={() => handleNavigate('dashboard')}
                   >
-                    {unresolvedCount}
-                  </span>
-                )}
-              </button>
+                    <LayoutDashboard size={16} />
+                    <span>Dashboard</span>
+                  </button>
 
-              <button
-                className={`nav-item-btn ${activeTab === 'ledger' ? 'active' : ''}`}
-                onClick={() => handleNavigate('ledger')}
-              >
-                <BookOpen size={16} />
-                <span>Misconception Ledger</span>
-              </button>
+                  <button
+                    className={`nav-item-btn ${activeTab === 'lectures' ? 'active' : ''}`}
+                    onClick={() => handleNavigate('lectures')}
+                  >
+                    <Video size={16} />
+                    <span>My Lectures</span>
+                  </button>
 
-              <button
-                className={`nav-item-btn ${activeTab === 'progress' ? 'active' : ''}`}
-                onClick={() => handleNavigate('progress')}
-              >
-                <TrendingUp size={16} />
-                <span>Learning Progress</span>
-              </button>
+                  <button
+                    className={`nav-item-btn ${activeTab === 'upload' ? 'active' : ''}`}
+                    onClick={() => handleNavigate('upload')}
+                  >
+                    <Upload size={16} />
+                    <span>Upload Lecture</span>
+                  </button>
+
+                  <button
+                    className={`nav-item-btn ${activeTab === 'misconceptions' ? 'active' : ''}`}
+                    onClick={() => handleNavigate('misconceptions')}
+                  >
+                    <AlertTriangle size={16} />
+                    <span>Misconceptions</span>
+                    {unresolvedCount > 0 && (
+                      <span
+                        style={{
+                          background: 'var(--priority-high-bg)',
+                          color: 'var(--priority-high-text)',
+                          fontSize: '11px',
+                          padding: '1px 6px',
+                          borderRadius: '9999px',
+                          fontWeight: 700,
+                          marginLeft: 'auto',
+                        }}
+                      >
+                        {unresolvedCount}
+                      </span>
+                    )}
+                  </button>
+
+                  <button
+                    className={`nav-item-btn ${activeTab === 'progress' ? 'active' : ''}`}
+                    onClick={() => handleNavigate('progress')}
+                  >
+                    <TrendingUp size={16} />
+                    <span>Learning Progress</span>
+                  </button>
+
+                  <button
+                    className={`nav-item-btn ${activeTab === 'courses' ? 'active' : ''}`}
+                    onClick={() => handleNavigate('courses')}
+                  >
+                    <GraduationCap size={16} />
+                    <span>My Courses</span>
+                  </button>
+                </>
+              )}
 
               <div style={{ height: '1px', background: 'var(--border-subtle)', margin: '8px 0' }} />
 
