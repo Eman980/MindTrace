@@ -59,7 +59,8 @@ class CrossTopicRecheckService:
             .filter(
                 Misconception.user_id == user_id,
                 Misconception.lecture_id == prereq_lecture.id,
-                Misconception.status.in_(["Unresolved", "Needs Review", "New"])
+                (Misconception.is_archived == False) | (Misconception.is_archived.is_(None)),
+                Misconception.status.notin_(["resolved", "Resolved"])
             )
             .order_by(desc(Misconception.severity_score), desc(Misconception.id))
             .limit(2)
@@ -71,6 +72,8 @@ class CrossTopicRecheckService:
         rechecks: List[Dict[str, Any]] = []
 
         for misc in open_misconceptions:
+            if not misc.concept_id:
+                continue
             # Find an existing MCQ question for this earlier concept (MCQ only)
             candidate_checkpoints = (
                 db.query(Checkpoint)
@@ -210,7 +213,9 @@ class CrossTopicRecheckService:
         ).all()
         total_score, level = calculate_misconception_severity([e.points_added for e in all_evidence])
         misconception.severity_score = max(0, total_score)
-        misconception.severity_level = level if misconception.status != "Resolved" else "Low"
+        misconception.peak_score = max(misconception.peak_score or 0, misconception.severity_score or 0)
+        is_resolved = (misconception.status or "").lower() == "resolved"
+        misconception.severity_level = "Low" if is_resolved else level
 
         # Record checkpoint attempt for audit ledger
         attempt = CheckpointAttempt(

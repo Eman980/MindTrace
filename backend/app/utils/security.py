@@ -52,3 +52,21 @@ def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(
     if user is None:
         raise credentials_exception
     return user
+
+def require_teacher(current_user: User = Depends(get_current_user)) -> User:
+    """Dependency that ensures the authenticated user has role='teacher'."""
+    if getattr(current_user, "role", None) != "teacher":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access restricted to instructors/teachers only."
+        )
+    return current_user
+
+def require_student(current_user: User = Depends(get_current_user)) -> User:
+    """Dependency that ensures the authenticated user has role='student'."""
+    if getattr(current_user, "role", None) != "student":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access restricted to students only."
+        )
+    return current_user

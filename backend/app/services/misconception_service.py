@@ -58,6 +58,7 @@ class MisconceptionService:
                 title=title,
                 summary=evidence_text,
                 severity_score=0,
+                peak_score=0,
                 severity_level="Low",
                 occurrence_count=1,
                 status="open",
@@ -91,7 +92,9 @@ class MisconceptionService:
         
         total_score, level = calculate_misconception_severity([e.points_added for e in all_evidence])
         misconception.severity_score = total_score
-        misconception.severity_level = level
+        misconception.peak_score = max(misconception.peak_score or 0, total_score or 0)
+        is_resolved = (misconception.status or "").lower() == "resolved"
+        misconception.severity_level = "Low" if is_resolved else level
         
         # Update Concept Progress
         self._update_concept_progress(db, user_id, concept_id, signal_type)
@@ -236,20 +239,22 @@ class MisconceptionService:
         if not misconception:
             return None
             
-        concept = db.query(Concept).filter(Concept.id == misconception.concept_id).first()
+        concept = db.query(Concept).filter(Concept.id == misconception.concept_id).first() if misconception.concept_id else None
         
         # Find latest failed checkpoint attempt if any
-        latest_bad_attempt = (
-            db.query(CheckpointAttempt)
-            .join(Checkpoint)
-            .filter(
-                Checkpoint.concept_id == misconception.concept_id,
-                CheckpointAttempt.user_id == user_id,
-                CheckpointAttempt.is_correct == False
+        latest_bad_attempt = None
+        if misconception.concept_id:
+            latest_bad_attempt = (
+                db.query(CheckpointAttempt)
+                .join(Checkpoint)
+                .filter(
+                    Checkpoint.concept_id == misconception.concept_id,
+                    CheckpointAttempt.user_id == user_id,
+                    CheckpointAttempt.is_correct == False
+                )
+                .order_by(desc(CheckpointAttempt.created_at))
+                .first()
             )
-            .order_by(desc(CheckpointAttempt.created_at))
-            .first()
-        )
         
         bad_answer = latest_bad_attempt.student_answer if latest_bad_attempt else None
         why_problematic = latest_bad_attempt.feedback_reason if latest_bad_attempt and latest_bad_attempt.feedback_reason else "The previous answer conflated the conceptual boundaries of this topic."
@@ -263,10 +268,12 @@ class MisconceptionService:
         
         # Retrieve or create a review checkpoint
         review_cp_data = checkpoint_service.get_review_checkpoint(misconception.concept_name)
-        review_checkpoint = db.query(Checkpoint).filter(
-            Checkpoint.concept_id == misconception.concept_id,
-            Checkpoint.is_review_checkpoint == True
-        ).first()
+        review_checkpoint = None
+        if misconception.concept_id:
+            review_checkpoint = db.query(Checkpoint).filter(
+                Checkpoint.concept_id == misconception.concept_id,
+                Checkpoint.is_review_checkpoint == True
+            ).first()
         
         if not review_checkpoint and concept:
             review_checkpoint = Checkpoint(
@@ -336,17 +343,20 @@ class MisconceptionService:
             ).all()
             total_score, level = calculate_misconception_severity([e.points_added for e in all_evidence])
             misconception.severity_score = max(0, total_score)
-            misconception.severity_level = level if misconception.status != "Resolved" else "Low"
+            misconception.peak_score = max(misconception.peak_score or 0, misconception.severity_score or 0)
+            is_resolved = (misconception.status or "").lower() == "resolved"
+            misconception.severity_level = "Low" if is_resolved else level
             
             # Update Concept Progress to Improving
-            progress = db.query(ConceptProgress).filter(
-                ConceptProgress.user_id == user_id,
-                ConceptProgress.concept_id == misconception.concept_id
-            ).first()
-            if progress:
-                progress.understanding_percentage = min(100, progress.understanding_percentage + 20)
-                progress.status = "Improving"
-                progress.last_studied = utcnow()
+            if misconception.concept_id:
+                progress = db.query(ConceptProgress).filter(
+                    ConceptProgress.user_id == user_id,
+                    ConceptProgress.concept_id == misconception.concept_id
+                ).first()
+                if progress:
+                    progress.understanding_percentage = min(100, progress.understanding_percentage + 20)
+                    progress.status = "Improving"
+                    progress.last_studied = utcnow()
         else:
             was_improving = (misconception.status or "").lower() == "improving"
             misconception.status = "open"
@@ -360,6 +370,15 @@ class MisconceptionService:
                 created_at=utcnow()
             )
             db.add(evidence)
+            db.flush()
+            all_evidence = db.query(MisconceptionEvidence).filter(
+                MisconceptionEvidence.misconception_id == misconception.id
+            ).all()
+            total_score, level = calculate_misconception_severity([e.points_added for e in all_evidence])
+            misconception.severity_score = max(0, total_score)
+            misconception.peak_score = max(misconception.peak_score or 0, misconception.severity_score or 0)
+            is_resolved = (misconception.status or "").lower() == "resolved"
+            misconception.severity_level = "Low" if is_resolved else level
             
         db.commit()
         db.refresh(misconception)

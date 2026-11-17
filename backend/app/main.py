@@ -4,12 +4,17 @@ from contextlib import asynccontextmanager
 
 from app.config import settings
 from app.database import engine, Base
-from app.routers import auth, lectures, checkpoints, playback, misconceptions, dashboard, concepts, demo, workflow, disguise
+from app.routers import auth, lectures, checkpoints, playback, misconceptions, dashboard, concepts, demo, workflow, disguise, teacher, student
+from app.routers import canonical_progress
+import app.canonical  # registers the new tables before create_all
+from app.canonical import run_startup_link
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Initialize DB tables (SQLite)
     Base.metadata.create_all(bind=engine)
+    # Link existing concepts to canonical concepts (safe on every start)
+    run_startup_link()
     # Initialize MongoDB Atlas indexes (NoSQL)
     try:
         from app.mongo import init_misconceptions_indexes
@@ -54,10 +59,15 @@ app.include_router(playback.router, prefix=settings.API_V1_PREFIX)
 app.include_router(misconceptions.router, prefix=settings.API_V1_PREFIX)
 app.include_router(dashboard.router, prefix=settings.API_V1_PREFIX)
 app.include_router(demo.router, prefix=settings.API_V1_PREFIX)
+app.include_router(canonical_progress.router, prefix=settings.API_V1_PREFIX)
 app.include_router(disguise.router, prefix=settings.API_V1_PREFIX)
 app.include_router(disguise.router, prefix="")
 app.include_router(workflow.router, prefix=settings.API_V1_PREFIX)
 app.include_router(workflow.router, prefix="")
+app.include_router(teacher.router, prefix=settings.API_V1_PREFIX)
+app.include_router(teacher.router, prefix="")
+app.include_router(student.router, prefix=settings.API_V1_PREFIX)
+app.include_router(student.router, prefix="")
 
 @app.get("/")
 def root():

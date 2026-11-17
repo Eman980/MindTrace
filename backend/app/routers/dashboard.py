@@ -25,7 +25,10 @@ def get_dashboard_stats(db: Session = Depends(get_db), current_user: User = Depe
         .count()
     )
     
-    all_misc = db.query(Misconception).filter(Misconception.user_id == user_id).all()
+    all_misc = db.query(Misconception).filter(
+        Misconception.user_id == user_id,
+        (Misconception.is_archived == False) | (Misconception.is_archived.is_(None))
+    ).all()
     total_misc = len(all_misc)
     high_p = sum(1 for m in all_misc if m.severity_level == "High" and m.status != "Resolved")
     med_p = sum(1 for m in all_misc if m.severity_level == "Medium" and m.status != "Resolved")

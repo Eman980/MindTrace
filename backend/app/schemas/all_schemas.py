@@ -1,4 +1,4 @@
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, EmailStr, Field, field_validator
 from typing import List, Optional, Any, Dict
 from datetime import datetime, date
 
@@ -7,6 +7,17 @@ class UserCreate(BaseModel):
     email: EmailStr
     password: str = Field(..., min_length=6)
     full_name: str
+    role: Optional[str] = "student"
+
+    @field_validator("role")
+    @classmethod
+    def validate_role(cls, v: Optional[str]) -> str:
+        if not v:
+            return "student"
+        v_clean = v.strip().lower()
+        if v_clean not in ("student", "teacher"):
+            raise ValueError("Role must be either 'student' or 'teacher'.")
+        return v_clean
 
 class UserLogin(BaseModel):
     email: EmailStr
@@ -209,11 +220,15 @@ class MediaFileOut(BaseModel):
 class LectureOut(BaseModel):
     id: int
     title: str
-    course_code: str
+    course_code: Optional[str] = None
+    course_id: Optional[int] = None
     description: Optional[str] = None
     duration_seconds: float
     media_type: str
     status: str
+    processing_status: Optional[str] = "ready"
+    progress: Optional[int] = 100
+    error_message: Optional[str] = None
     transcription_status: Optional[str] = "ready"
     processing_error: Optional[str] = None
     is_demo: bool
@@ -235,6 +250,9 @@ class LectureUploadOut(BaseModel):
     recording_id: int
     title: str
     status: str
+    processing_status: Optional[str] = "uploaded"
+    progress: Optional[int] = 5
+    error_message: Optional[str] = None
     duration_seconds: float
     concepts_count: int
     is_duplicate: bool = False
@@ -244,6 +262,7 @@ class LectureUpdateIn(BaseModel):
     title: Optional[str] = None
     description: Optional[str] = None
     course_code: Optional[str] = None
+    course_id: Optional[int] = None
     prerequisite_lecture_id: Optional[int] = None
 
 class LectureDetailOut(LectureOut):
@@ -293,9 +312,9 @@ class MisconceptionEvidenceOut(BaseModel):
 class MisconceptionOut(BaseModel):
     id: int
     user_id: int
-    lecture_id: int
+    lecture_id: Optional[int] = None
     lecture_title: Optional[str] = None
-    concept_id: int
+    concept_id: Optional[int] = None
     concept_name: str
     title: str
     summary: Optional[str] = None
@@ -304,6 +323,8 @@ class MisconceptionOut(BaseModel):
     concept_start_time: Optional[float] = None
     concept_end_time: Optional[float] = None
     severity_score: int
+    peak_score: Optional[int] = 0
+    current_score: Optional[int] = None
     severity_level: str  # Low, Medium, High
     occurrence_count: int
     status: str          # Unresolved, Needs Review, In Progress, Resolved
@@ -319,6 +340,7 @@ class MisconceptionOut(BaseModel):
     improving_at: Optional[date] = None
     recheck_due: Optional[date] = None
     relapse_count: Optional[int] = 0
+    is_archived: Optional[bool] = False
     # ── Root-cause prerequisite info ──────────────────────────────────────────
     root_cause_concept: Optional[str] = None
     root_cause_lecture_title: Optional[str] = None
@@ -341,10 +363,10 @@ class MisconceptionAttemptHistoryItem(BaseModel):
 
 class MisconceptionDetailOut(BaseModel):
     id: int
-    concept_id: int
+    concept_id: Optional[int] = None
     concept_name: str
-    lecture_id: int
-    lecture_title: str
+    lecture_id: Optional[int] = None
+    lecture_title: Optional[str] = None
     why_detected: str
     original_question: str
     student_wrong_answer: str
@@ -358,11 +380,14 @@ class MisconceptionDetailOut(BaseModel):
     status: str
     severity_level: str
     severity_score: int
+    peak_score: Optional[int] = 0
+    current_score: Optional[int] = None
     improving_at: Optional[str] = None
     recheck_due: Optional[str] = None
     next_reassessment_info: Optional[str] = None
     relapse_count: int
     resolved_at: Optional[str] = None
+    is_archived: Optional[bool] = False
     assessment_history: List[MisconceptionAttemptHistoryItem] = []
 
 class MisconceptionReviewOut(BaseModel):
@@ -411,6 +436,8 @@ class ReprobeItemOut(BaseModel):
     evidence_status: Optional[str] = None
     severity_level: str
     severity_score: int
+    peak_score: Optional[int] = 0
+    current_score: Optional[int] = None
     last_detected: datetime
     hours_since_last_seen: float
     required_delay_hours: float
@@ -507,4 +534,120 @@ class RecheckDueItemOut(BaseModel):
     recheck_due: str
     relapse_count: int = 0
     status: str = "improving"
+
+
+# --- Teacher Courses (Teacher Insights Phase 2) ---
+class CourseCreateIn(BaseModel):
+    title: str = Field(..., min_length=1, max_length=255)
+    course_code: Optional[str] = Field(None, max_length=100)
+    description: Optional[str] = None
+
+    @field_validator("title")
+    @classmethod
+    def validate_title(cls, v: str) -> str:
+        s = v.strip()
+        if not s:
+            raise ValueError("Course title cannot be empty.")
+        return s
+
+    @field_validator("course_code")
+    @classmethod
+    def clean_course_code(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return None
+        s = v.strip()
+        return s if s else None
+
+
+class CourseUpdateIn(BaseModel):
+    title: Optional[str] = Field(None, min_length=1, max_length=255)
+    course_code: Optional[str] = Field(None, max_length=100)
+    description: Optional[str] = None
+
+    @field_validator("title")
+    @classmethod
+    def validate_title(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return None
+        s = v.strip()
+        if not s:
+            raise ValueError("Course title cannot be empty.")
+        return s
+
+    @field_validator("course_code")
+    @classmethod
+    def clean_course_code(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return None
+        s = v.strip()
+        return s if s else None
+
+
+class CourseOut(BaseModel):
+    id: int
+    teacher_id: int
+    title: str
+    course_code: Optional[str] = None
+    description: Optional[str] = None
+    join_code: str
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+# --- Student Course Joining & Consent (Teacher Insights Phase 3) ---
+class CoursePreviewIn(BaseModel):
+    join_code: str = Field(..., min_length=1, max_length=32)
+
+    @field_validator("join_code")
+    @classmethod
+    def clean_code(cls, v: str) -> str:
+        s = v.strip().upper()
+        if not s:
+            raise ValueError("Join code cannot be empty.")
+        return s
+
+
+class CoursePreviewOut(BaseModel):
+    course_id: int
+    title: str
+    course_code: Optional[str] = None
+    description: Optional[str] = None
+    teacher_name: str
+    already_enrolled: bool = False
+    enrollment_status: Optional[str] = None
+
+
+class CourseJoinIn(BaseModel):
+    join_code: str = Field(..., min_length=1, max_length=32)
+    consent_granted: bool = Field(..., description="Explicit student consent. Must be True to activate course enrollment.")
+
+    @field_validator("join_code")
+    @classmethod
+    def clean_code(cls, v: str) -> str:
+        s = v.strip().upper()
+        if not s:
+            raise ValueError("Join code cannot be empty.")
+        return s
+
+
+class StudentEnrollmentOut(BaseModel):
+    id: int
+    course_id: int
+    title: str
+    course_code: Optional[str] = None
+    description: Optional[str] = None
+    teacher_name: str
+    consent_granted: bool
+    status: str
+    consent_at: Optional[datetime] = None
+    created_at: datetime
+    associated_lectures_count: int = 0
+
+    class Config:
+        from_attributes = True
+
+
 

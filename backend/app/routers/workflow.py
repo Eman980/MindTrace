@@ -25,7 +25,8 @@ router = APIRouter(tags=["Workflow"])
 @router.post("/upload")
 async def workflow_upload(
     title: str = Form(...),
-    course_code: str = Form("CS101"),
+    course_code: Optional[str] = Form(None),
+    course_id: Optional[int] = Form(None),
     description: Optional[str] = Form(""),
     transcript_text: Optional[str] = Form(None),
     transcript_file: Optional[UploadFile] = File(None),
@@ -36,6 +37,7 @@ async def workflow_upload(
     return await upload_lecture(
         title=title,
         course_code=course_code,
+        course_id=course_id,
         description=description,
         transcript_text=transcript_text,
         transcript_file=transcript_file,
@@ -135,7 +137,10 @@ async def workflow_general_report(
 ):
     """Overall report across all recordings for the current student."""
     from app.models.all_models import Misconception
-    all_misc = db.query(Misconception).filter(Misconception.user_id == current_user.id).all()
+    all_misc = db.query(Misconception).filter(
+        Misconception.user_id == current_user.id,
+        (Misconception.is_archived == False) | (Misconception.is_archived.is_(None))
+    ).all()
 
     open_count = 0
     improving_count = 0
