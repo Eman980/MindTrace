@@ -22,6 +22,8 @@ class User(Base):
     updated_at = Column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
 
     lectures = relationship("Lecture", back_populates="user", cascade="all, delete-orphan")
+    courses = relationship("Course", back_populates="teacher", cascade="all, delete-orphan")
+    enrollments = relationship("CourseEnrollment", back_populates="student", cascade="all, delete-orphan")
     playback_events = relationship("PlaybackEvent", back_populates="user", cascade="all, delete-orphan")
     checkpoint_attempts = relationship("CheckpointAttempt", back_populates="user", cascade="all, delete-orphan")
     misconceptions = relationship("Misconception", back_populates="user", cascade="all, delete-orphan")
@@ -34,11 +36,15 @@ class Lecture(Base):
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
     title = Column(String(255), nullable=False)
-    course_code = Column(String(100), default="CS101")
+    course_code = Column(String(100), nullable=True, default=None)
+    course_id = Column(Integer, ForeignKey("courses.id", ondelete="SET NULL"), nullable=True, index=True)
     description = Column(Text, nullable=True)
     duration_seconds = Column(Float, default=0.0)
     media_type = Column(String(50), default="video")  # video or audio
     status = Column(String(50), default="ready")      # processing, ready, failed, needs_transcription
+    processing_status = Column(String(50), default="ready")  # uploaded, transcribing, segmenting, generating, ready, failed
+    progress = Column(Integer, default=100)
+    error_message = Column(Text, nullable=True)
     transcription_status = Column(String(50), default="ready")  # ready, untranscribed, transcribed
     processing_error = Column(Text, nullable=True)
     is_demo = Column(Boolean, default=False)
@@ -52,11 +58,12 @@ class Lecture(Base):
     )
 
     user = relationship("User", back_populates="lectures")
+    course = relationship("Course", back_populates="lectures")
     media_file = relationship("MediaFile", uselist=False, back_populates="lecture", cascade="all, delete-orphan")
     transcript = relationship("Transcript", uselist=False, back_populates="lecture", cascade="all, delete-orphan")
     concepts = relationship("Concept", back_populates="lecture", cascade="all, delete-orphan", order_by="Concept.order_index")
     playback_events = relationship("PlaybackEvent", back_populates="lecture", cascade="all, delete-orphan")
-    misconceptions = relationship("Misconception", back_populates="lecture", cascade="all, delete-orphan")
+    misconceptions = relationship("Misconception", back_populates="lecture")
 
 
 class MediaFile(Base):
@@ -171,7 +178,7 @@ class Concept(Base):
 
     lecture = relationship("Lecture", back_populates="concepts")
     checkpoints = relationship("Checkpoint", back_populates="concept", cascade="all, delete-orphan", order_by="Checkpoint.order_index")
-    misconceptions = relationship("Misconception", back_populates="concept", cascade="all, delete-orphan")
+    misconceptions = relationship("Misconception", back_populates="concept")
     progress_records = relationship("ConceptProgress", back_populates="concept", cascade="all, delete-orphan")
 
 
@@ -298,13 +305,15 @@ class Misconception(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
-    lecture_id = Column(Integer, ForeignKey("lectures.id", ondelete="CASCADE"), nullable=False, index=True)
-    concept_id = Column(Integer, ForeignKey("concepts.id", ondelete="CASCADE"), nullable=False, index=True)
+    lecture_id = Column(Integer, ForeignKey("lectures.id"), nullable=True, index=True)
+    concept_id = Column(Integer, ForeignKey("concepts.id"), nullable=True, index=True)
+    lecture_title = Column(String(255), nullable=True)
     concept_name = Column(String(255), nullable=False)
     title = Column(String(255), nullable=False)
     summary = Column(Text, nullable=True)
 
     severity_score = Column(Integer, default=2)
+    peak_score = Column(Integer, nullable=True, default=0)
     severity_level = Column(String(20), default="Medium")  # Low, Medium, High
     occurrence_count = Column(Integer, default=1)
 
@@ -313,6 +322,7 @@ class Misconception(Base):
     improving_at = Column(Date, nullable=True)
     recheck_due = Column(Date, nullable=True)
     relapse_count = Column(Integer, default=0, nullable=True)
+    is_archived = Column(Boolean, default=False, nullable=True)
 
     # ── Parallel evidence_status field (state machine from brief) ───────────
     # Suspected -> Confirmed -> Resolved | Memorized; any new evidence after
@@ -408,4 +418,43 @@ class PasswordResetToken(Base):
     created_at = Column(DateTime(timezone=True), default=utcnow)
 
     user = relationship("User")
+
+
+class Course(Base):
+    __tablename__ = "courses"
+
+    id = Column(Integer, primary_key=True, index=True)
+    teacher_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    title = Column(String(255), nullable=False)
+    course_code = Column(String(100), nullable=True)
+    description = Column(Text, nullable=True)
+    join_code = Column(String(32), unique=True, nullable=False, index=True)
+    created_at = Column(DateTime(timezone=True), default=utcnow)
+    updated_at = Column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+    teacher = relationship("User", back_populates="courses")
+    enrollments = relationship("CourseEnrollment", back_populates="course", cascade="all, delete-orphan")
+    lectures = relationship("Lecture", back_populates="course")
+
+
+class CourseEnrollment(Base):
+    __tablename__ = "course_enrollments"
+
+    id = Column(Integer, primary_key=True, index=True)
+    course_id = Column(Integer, ForeignKey("courses.id", ondelete="CASCADE"), nullable=False, index=True)
+    student_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    consent_granted = Column(Boolean, default=False, nullable=False)
+    status = Column(String(50), default="active", nullable=False)  # active | revoked
+    consent_at = Column(DateTime(timezone=True), default=utcnow)
+    created_at = Column(DateTime(timezone=True), default=utcnow)
+    updated_at = Column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+    course = relationship("Course", back_populates="enrollments")
+    student = relationship("User", back_populates="enrollments")
+
+    __table_args__ = (
+        UniqueConstraint("course_id", "student_id", name="uq_course_student_enrollment"),
+    )
+
+
 

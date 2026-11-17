@@ -3,16 +3,17 @@ import uuid
 import hashlib
 import aiofiles
 from typing import List, Optional
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, status, Request
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, status, Request, BackgroundTasks
 from fastapi.responses import StreamingResponse, FileResponse
 from sqlalchemy.orm import Session
-from sqlalchemy import desc
+from sqlalchemy import desc, func
 from sqlalchemy.exc import IntegrityError
 
-from app.database import get_db
+from app.database import get_db, SessionLocal
 from app.models.all_models import (
     User, Lecture, MediaFile, Transcript, TranscriptSegment,
-    Concept, Checkpoint, CheckpointAttempt, Misconception, ConceptProgress, PlaybackEvent
+    Concept, Checkpoint, CheckpointAttempt, Misconception, ConceptProgress, PlaybackEvent,
+    Course, CourseEnrollment
 )
 from app.schemas.all_schemas import (
     LectureOut,
@@ -51,7 +52,7 @@ def list_lectures(db: Session = Depends(get_db), current_user: User = Depends(ge
         unresolved_count = db.query(Misconception).filter(
             Misconception.lecture_id == lec.id,
             Misconception.user_id == current_user.id,
-            Misconception.status.in_(["Unresolved", "Needs Review", "New"])
+            func.lower(Misconception.status) != 'resolved'
         ).count()
         
         # Calculate average progress
@@ -75,10 +76,14 @@ def list_lectures(db: Session = Depends(get_db), current_user: User = Depends(ge
             "id": lec.id,
             "title": lec.title,
             "course_code": lec.course_code,
+            "course_id": lec.course_id,
             "description": lec.description,
             "duration_seconds": lec.duration_seconds,
             "media_type": lec.media_type,
             "status": lec.status,
+            "processing_status": getattr(lec, "processing_status", "ready") or lec.status,
+            "progress": getattr(lec, "progress", 100) or 100,
+            "error_message": getattr(lec, "error_message", None) or lec.processing_error,
             "is_demo": lec.is_demo,
             "file_hash": lec.file_hash,
             "prerequisite_lecture_id": prereq_id,
@@ -155,6 +160,10 @@ async def generate_concepts_for_lecture_internal(
     if not lecture.transcript or not lecture.transcript.segments:
         await transcribe_lecture_internal(lecture, db)
 
+    lecture.processing_status = "segmenting"
+    lecture.progress = 50
+    db.commit()
+
     segments_data = [
         {"start_time": s.start_time, "end_time": s.end_time, "text": s.text}
         for s in lecture.transcript.segments
@@ -165,43 +174,54 @@ async def generate_concepts_for_lecture_internal(
         lecture_title=lecture.title,
         duration=lecture.duration_seconds
     )
+    if not concepts_data:
+        raise RuntimeError("Concept extraction returned 0 concepts.")
 
-    # Delete existing concepts and checkpoints to regenerate cleanly
-    for old_c in list(lecture.concepts):
-        db.delete(old_c)
-    db.commit()
-
-    concepts_out = []
+    # 1. ATOMIC COMMIT: Save newly segmented concepts first so the timeline & notes exist
     saved_concepts = []
-    for c_idx, c_info in enumerate(concepts_data):
-        concept = Concept(
-            lecture_id=lecture.id,
-            title=c_info["title"],
-            description=c_info["description"],
-            start_time=c_info["start_time"],
-            end_time=c_info["end_time"],
-            transcript_text=c_info.get("transcript_text", ""),
-            order_index=c_info.get("order_index", c_idx),
-            confidence_score=c_info.get("confidence_score", 0.95),
-            core_concepts=c_info.get("core_concepts", []),
-            confusing_topics=c_info.get("confusing_topics", [])
-        )
-        db.add(concept)
+    concept_id_map = {}
+    try:
+        # Delete old concepts and checkpoints if regenerating
+        for old_c in list(lecture.concepts):
+            db.delete(old_c)
+        db.flush()
+
+        for c_idx, c_info in enumerate(concepts_data):
+            concept = Concept(
+                lecture_id=lecture.id,
+                title=c_info["title"],
+                description=c_info["description"],
+                start_time=c_info["start_time"],
+                end_time=c_info["end_time"],
+                transcript_text=c_info.get("transcript_text", ""),
+                order_index=c_info.get("order_index", c_idx),
+                confidence_score=c_info.get("confidence_score", 0.95),
+                core_concepts=c_info.get("core_concepts", []),
+                confusing_topics=c_info.get("confusing_topics", [])
+            )
+            db.add(concept)
+            db.flush()
+            concept_id_map[c_idx] = concept.id
+            saved_concepts.append(concept)
+
+            prog = ConceptProgress(
+                user_id=user_id,
+                concept_id=concept.id,
+                understanding_percentage=0,
+                status="Not Started"
+            )
+            db.add(prog)
+
+        lecture.status = "processing"
+        lecture.processing_status = "generating"
+        lecture.progress = 75
         db.commit()
-        db.refresh(concept)
-        saved_concepts.append(concept)
+    except Exception as concept_save_err:
+        db.rollback()
+        raise concept_save_err
 
-        prog = ConceptProgress(
-            user_id=user_id,
-            concept_id=concept.id,
-            understanding_percentage=0,
-            status="Not Started"
-        )
-        db.add(prog)
-    db.commit()
-
-    # Generate unified lecture checkpoints across types (MCQ, Short, Scenario) and difficulties (Easy, Moderate)
-    concept_dicts = [
+    # 2. Generate checkpoint questions grounded in each concept's own transcript segment
+    temp_concepts = [
         {
             "id": c.id,
             "title": c.title,
@@ -209,39 +229,61 @@ async def generate_concepts_for_lecture_internal(
             "start_time": c.start_time,
             "end_time": c.end_time,
             "transcript_text": c.transcript_text or "",
-            "core_concepts": c.core_concepts,
-            "confusing_topics": c.confusing_topics
+            "core_concepts": c.core_concepts or [],
+            "confusing_topics": c.confusing_topics or []
         }
         for c in saved_concepts
     ]
 
-    chk_list = await checkpoint_service.generate_lecture_checkpoints(
-        concepts=concept_dicts,
-        full_transcript=lecture.transcript.full_text if lecture.transcript else "",
-        lecture_title=lecture.title
-    )
-
-    total_chks = len(chk_list)
-    for q_idx, q_item in enumerate(chk_list):
-        chk = Checkpoint(
-            concept_id=q_item["concept_id"],
-            question_type=q_item.get("question_type", "mcq"),
-            difficulty=q_item.get("difficulty", "easy"),
-            scenario_text=q_item.get("scenario_text"),
-            question_text=q_item["question_text"],
-            options=q_item.get("options", []),
-            correct_answer=q_item["correct_answer"],
-            explanation=q_item.get("explanation", ""),
-            order_index=q_item.get("order_index", q_idx),
-            is_review_checkpoint=q_item.get("is_review_checkpoint", False),
-            item_family_role=q_item.get("item_family_role", "original"),
-            target_misconception=q_item.get("target_misconception", None),
-            source_excerpt=q_item.get("source_excerpt", None),
-            source_timestamp=q_item.get("source_timestamp", None),
-            source_end_timestamp=q_item.get("source_end_timestamp", None)
+    try:
+        chk_list = await checkpoint_service.generate_lecture_checkpoints(
+            concepts=temp_concepts,
+            full_transcript=lecture.transcript.full_text if lecture.transcript else "",
+            lecture_title=lecture.title
         )
-        db.add(chk)
-    db.commit()
+        if chk_list:
+            valid_cids = {c.id for c in saved_concepts}
+            default_cid = saved_concepts[0].id
+            for q_idx, q_item in enumerate(chk_list):
+                raw_cid = q_item.get("concept_id")
+                target_cid = raw_cid if raw_cid in valid_cids else default_cid
+                chk = Checkpoint(
+                    concept_id=target_cid,
+                    question_type=q_item.get("question_type", "mcq"),
+                    difficulty=q_item.get("difficulty", "easy"),
+                    scenario_text=q_item.get("scenario_text"),
+                    question_text=q_item["question_text"],
+                    options=q_item.get("options", []),
+                    correct_answer=q_item["correct_answer"],
+                    explanation=q_item.get("explanation", ""),
+                    order_index=q_item.get("order_index", q_idx),
+                    is_review_checkpoint=q_item.get("is_review_checkpoint", False),
+                    item_family_role=q_item.get("item_family_role", "original"),
+                    target_misconception=q_item.get("target_misconception", None),
+                    source_excerpt=q_item.get("source_excerpt", None),
+                    source_timestamp=q_item.get("source_timestamp", None),
+                    source_end_timestamp=q_item.get("source_end_timestamp", None)
+                )
+                db.add(chk)
+
+            lecture.status = "ready"
+            lecture.processing_status = "ready"
+            lecture.progress = 100
+            lecture.error_message = None
+            db.commit()
+        else:
+            lecture.status = "ready"
+            lecture.processing_status = "ready"
+            lecture.progress = 100
+            lecture.error_message = "No diagnostic questions could be generated."
+            db.commit()
+    except Exception as chk_err:
+        print(f"[CheckpointGen] Checkpoint generation error: {chk_err}. Preserving concepts & timeline.")
+        lecture.status = "ready"
+        lecture.processing_status = "ready"
+        lecture.progress = 100
+        lecture.error_message = f"Question generation failed: {chk_err}"
+        db.commit()
 
     saved_checkpoints = (
         db.query(Checkpoint)
@@ -273,6 +315,7 @@ async def generate_concepts_for_lecture_internal(
         for chk in saved_checkpoints
     ]
 
+    concepts_out = []
     for c in saved_concepts:
         db.refresh(c)
         c_checkpoints = [chk for chk in saved_checkpoints if chk.concept_id == c.id]
@@ -297,6 +340,9 @@ async def generate_concepts_for_lecture_internal(
         })
 
     lecture.status = "ready"
+    lecture.processing_status = "ready"
+    lecture.progress = 100
+    lecture.error_message = None
     lecture.processing_error = None
     db.commit()
     db.refresh(lecture)
@@ -307,16 +353,75 @@ async def generate_concepts_for_lecture_internal(
         "lecture_id": lecture.id,
         "status": "ready",
         "concepts_count": len(concepts_out),
-        "checkpoints_count": total_chks,
+        "checkpoints_count": len(saved_checkpoints),
         "concepts": concepts_out,
         "checkpoints": checkpoints_out
     }
 
 
+async def process_lecture_pipeline_background(
+    lecture_id: int,
+    user_id: int,
+    manual_transcript_content: Optional[str] = None,
+    audio_language: str = "en"
+):
+    db: Session = SessionLocal()
+    try:
+        lecture = db.query(Lecture).filter(Lecture.id == lecture_id).first()
+        if not lecture:
+            return
+
+        # Stage 1: Transcribing
+        lecture.status = "processing"
+        lecture.processing_status = "transcribing"
+        lecture.progress = 20
+        lecture.error_message = None
+        db.commit()
+
+        stt_result = await transcribe_lecture_internal(
+            lecture,
+            db,
+            manual_transcript=manual_transcript_content,
+            audio_language=audio_language or "en"
+        )
+        quality_warning = stt_result.get("quality_warning")
+        if quality_warning:
+            lecture.processing_error = quality_warning
+            db.commit()
+
+        # Stage 2: Segmenting & Stage 3: Generating Checkpoints (handled atomically)
+        await generate_concepts_for_lecture_internal(lecture, user_id, db)
+
+        # Auto-detect prerequisite links
+        try:
+            db.refresh(lecture)
+            await auto_detect_prerequisite_links(user_id, lecture, db)
+        except Exception as _prereq_err:
+            print(f"[PrereqLinks] Non-fatal error during auto-link: {_prereq_err}")
+
+    except Exception as e:
+        print(f"[UploadPipeline] Background processing failed for lecture {lecture_id}: {e}")
+        try:
+            db.rollback()
+            lec = db.query(Lecture).filter(Lecture.id == lecture_id).first()
+            if lec:
+                lec.status = "failed"
+                lec.processing_status = "failed"
+                lec.error_message = str(e)
+                lec.processing_error = str(e)
+                db.commit()
+        except Exception as db_err:
+            print(f"[UploadPipeline] Failed to record error state: {db_err}")
+    finally:
+        db.close()
+
+
 @router.post("/upload")
 async def upload_lecture(
+    background_tasks: BackgroundTasks,
     title: str = Form(...),
-    course_code: str = Form("CS101"),
+    course_code: Optional[str] = Form(None),
+    course_id: Optional[int] = Form(None),
     description: Optional[str] = Form(""),
     transcript_text: Optional[str] = Form(None),
     transcript_file: Optional[UploadFile] = File(None),
@@ -403,6 +508,9 @@ async def upload_lecture(
             "recording_id": existing_lecture.id,
             "title": existing_lecture.title,
             "status": existing_lecture.status,
+            "processing_status": getattr(existing_lecture, "processing_status", "ready") or existing_lecture.status,
+            "progress": getattr(existing_lecture, "progress", 100) or 100,
+            "error_message": getattr(existing_lecture, "error_message", None),
             "duration_seconds": existing_lecture.duration_seconds,
             "concepts_count": len(existing_lecture.concepts)
         }
@@ -429,14 +537,45 @@ async def upload_lecture(
     if not manual_transcript_content and transcript_text and transcript_text.strip():
         manual_transcript_content = transcript_text.strip()
 
+    # Validate optional course_id association
+    validated_course_id = None
+    target_course = None
+    if course_id is not None:
+        target_course = db.query(Course).filter(Course.id == course_id).first()
+        if not target_course:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Course with ID {course_id} does not exist."
+            )
+        enrollment = db.query(CourseEnrollment).filter(
+            CourseEnrollment.course_id == course_id,
+            CourseEnrollment.student_id == current_user.id,
+            CourseEnrollment.consent_granted.is_(True),
+            CourseEnrollment.status == "active"
+        ).first()
+        if not enrollment:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You cannot associate a lecture with a course you are not actively enrolled in with granted consent."
+            )
+        validated_course_id = target_course.id
+
+    clean_course_code = course_code.strip() if course_code and course_code.strip() else None
+    if validated_course_id and not clean_course_code and target_course and target_course.course_code:
+        clean_course_code = target_course.course_code
+
     # 2. Create Lecture Record (safely handling simultaneous concurrent uploads)
     lecture = Lecture(
         user_id=current_user.id,
         title=title.strip(),
-        course_code=course_code.strip() or "CS101",
+        course_code=clean_course_code,
+        course_id=validated_course_id,
         description=description.strip() if description else f"Lecture recording uploaded on {file.filename}",
         media_type=media_type,
         status="processing",
+        processing_status="uploaded",
+        progress=5,
+        error_message=None,
         is_demo=False,
         file_hash=file_hash,
         prerequisite_lecture_id=None  # Set automatically by auto_detect_prerequisite_links
@@ -466,6 +605,9 @@ async def upload_lecture(
                 "recording_id": existing_lecture.id,
                 "title": existing_lecture.title,
                 "status": existing_lecture.status,
+                "processing_status": getattr(existing_lecture, "processing_status", "ready") or existing_lecture.status,
+                "progress": getattr(existing_lecture, "progress", 100) or 100,
+                "error_message": getattr(existing_lecture, "error_message", None),
                 "duration_seconds": existing_lecture.duration_seconds,
                 "concepts_count": len(existing_lecture.concepts)
             }
@@ -487,51 +629,29 @@ async def upload_lecture(
     db.add(media)
     db.commit()
 
-    # 4. Execute Multi-stage Processing Pipeline
-    quality_warning = None
-    try:
-        stt_result = await transcribe_lecture_internal(
-            lecture,
-            db,
-            manual_transcript=manual_transcript_content,
-            audio_language=audio_language or "en"
-        )
-        quality_warning = stt_result.get("quality_warning")
-        if quality_warning:
-            lecture.processing_error = quality_warning
-            db.commit()
-
-        await generate_concepts_for_lecture_internal(lecture, current_user.id, db)
-
-        # Auto-detect concept-level prerequisite links (fires-and-forgets on failure)
-        try:
-            db.refresh(lecture)
-            await auto_detect_prerequisite_links(current_user.id, lecture, db)
-        except Exception as _prereq_err:
-            print(f"[PrereqLinks] Non-fatal error during auto-link: {_prereq_err}")
-
-    except Exception as e:
-        db.rollback()
-        lecture.status = "failed"
-        lecture.processing_error = str(e)
-        db.commit()
-        print(f"[UploadPipeline] Processing failed: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST if isinstance(e, ValueError) else status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=str(e)
-        )
+    # 4. Dispatch Background Processing Pipeline
+    background_tasks.add_task(
+        process_lecture_pipeline_background,
+        lecture.id,
+        current_user.id,
+        manual_transcript_content,
+        audio_language or "en"
+    )
 
     return {
         "success": True,
         "is_duplicate": False,
-        "message": "Lecture uploaded and processed successfully.",
-        "quality_warning": quality_warning,
+        "message": "Lecture uploaded successfully. Background processing started.",
+        "quality_warning": None,
         "lecture_id": lecture.id,
         "recording_id": lecture.id,
         "title": lecture.title,
-        "status": lecture.status,
+        "status": "processing",
+        "processing_status": "uploaded",
+        "progress": 5,
+        "error_message": None,
         "duration_seconds": lecture.duration_seconds,
-        "concepts_count": len(lecture.concepts)
+        "concepts_count": 0
     }
 
 
@@ -606,6 +726,109 @@ async def generate_lecture_endpoint(
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST if isinstance(e, ValueError) else status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=str(e)
+        )
+
+
+@router.post("/regenerate-checkpoints/{lecture_id}")
+@router.post("/{lecture_id}/regenerate-checkpoints")
+@router.post("/{lecture_id}/checkpoints/generate")
+async def regenerate_lecture_checkpoints_endpoint(
+    lecture_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Regenerates diagnostic checkpoint questions for an existing lecture's concepts
+    grounded in each concept's own transcript text, without deleting the concepts.
+    """
+    lecture = db.query(Lecture).filter(
+        Lecture.id == lecture_id,
+        Lecture.user_id == current_user.id
+    ).first()
+    if not lecture:
+        raise HTTPException(status_code=404, detail=f"Recording/Lecture {lecture_id} not found.")
+
+    if not lecture.concepts or len(lecture.concepts) == 0:
+        return await generate_lecture_endpoint(lecture_id, db, current_user)
+
+    lecture.processing_status = "generating"
+    lecture.progress = 80
+    lecture.error_message = None
+    db.commit()
+
+    temp_concepts = [
+        {
+            "id": c.id,
+            "title": c.title,
+            "description": c.description,
+            "start_time": c.start_time,
+            "end_time": c.end_time,
+            "transcript_text": c.transcript_text or "",
+            "core_concepts": c.core_concepts or [],
+            "confusing_topics": c.confusing_topics or []
+        }
+        for c in sorted(lecture.concepts, key=lambda x: x.order_index)
+    ]
+
+    try:
+        chk_list = await checkpoint_service.generate_lecture_checkpoints(
+            concepts=temp_concepts,
+            full_transcript=lecture.transcript.full_text if lecture.transcript else "",
+            lecture_title=lecture.title
+        )
+        if not chk_list:
+            raise RuntimeError("Checkpoint generation returned 0 questions.")
+
+        # Atomic replacement of checkpoints for these concepts
+        concept_ids = [c.id for c in lecture.concepts]
+        db.query(Checkpoint).filter(Checkpoint.concept_id.in_(concept_ids)).delete(synchronize_session=False)
+        db.flush()
+
+        valid_cids = set(concept_ids)
+        default_cid = concept_ids[0]
+        for q_idx, q_item in enumerate(chk_list):
+            raw_cid = q_item.get("concept_id")
+            target_cid = raw_cid if raw_cid in valid_cids else default_cid
+            chk = Checkpoint(
+                concept_id=target_cid,
+                question_type=q_item.get("question_type", "mcq"),
+                difficulty=q_item.get("difficulty", "easy"),
+                scenario_text=q_item.get("scenario_text"),
+                question_text=q_item["question_text"],
+                options=q_item.get("options", []),
+                correct_answer=q_item["correct_answer"],
+                explanation=q_item.get("explanation", ""),
+                order_index=q_item.get("order_index", q_idx),
+                is_review_checkpoint=q_item.get("is_review_checkpoint", False),
+                item_family_role=q_item.get("item_family_role", "original"),
+                target_misconception=q_item.get("target_misconception", None),
+                source_excerpt=q_item.get("source_excerpt", None),
+                source_timestamp=q_item.get("source_timestamp", None),
+                source_end_timestamp=q_item.get("source_end_timestamp", None)
+            )
+            db.add(chk)
+
+        lecture.status = "ready"
+        lecture.processing_status = "ready"
+        lecture.progress = 100
+        lecture.error_message = None
+        db.commit()
+        db.refresh(lecture)
+
+        return {
+            "success": True,
+            "message": f"Successfully generated {len(chk_list)} checkpoints.",
+            "lecture_id": lecture.id,
+            "checkpoints_count": len(chk_list)
+        }
+    except Exception as e:
+        db.rollback()
+        lecture.processing_status = "ready"
+        lecture.error_message = f"Regenerate questions failed: {e}"
+        db.commit()
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to generate questions: {e}"
         )
 
 
@@ -985,10 +1208,14 @@ def get_lecture(lecture_id: int, db: Session = Depends(get_db), current_user: Us
         "id": lecture.id,
         "title": lecture.title,
         "course_code": lecture.course_code,
+        "course_id": lecture.course_id,
         "description": lecture.description,
         "duration_seconds": lecture.duration_seconds,
         "media_type": lecture.media_type,
         "status": lecture.status,
+        "processing_status": getattr(lecture, "processing_status", "ready") or lecture.status,
+        "progress": getattr(lecture, "progress", 100) or 100,
+        "error_message": getattr(lecture, "error_message", None) or lecture.processing_error,
         "is_demo": lecture.is_demo,
         "file_hash": lecture.file_hash,
         "prerequisite_lecture_id": prereq_id,
@@ -1001,6 +1228,29 @@ def get_lecture(lecture_id: int, db: Session = Depends(get_db), current_user: Us
         "media_file": media_out,
         "transcript": transcript_out,
         "concepts": concepts_out
+    }
+
+@router.get("/{lecture_id}/status")
+def get_lecture_status_endpoint(
+    lecture_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    lecture = db.query(Lecture).filter(
+        Lecture.id == lecture_id,
+        Lecture.user_id == current_user.id
+    ).first()
+    if not lecture:
+        raise HTTPException(status_code=404, detail="Lecture not found.")
+    return {
+        "id": lecture.id,
+        "title": lecture.title,
+        "status": lecture.status,
+        "processing_status": getattr(lecture, "processing_status", "ready") or lecture.status,
+        "progress": getattr(lecture, "progress", 100) or 100,
+        "error_message": getattr(lecture, "error_message", None) or lecture.processing_error,
+        "concepts_count": len(lecture.concepts),
+        "duration_seconds": lecture.duration_seconds
     }
 
 @router.get("/{lecture_id}/media")
@@ -1184,10 +1434,32 @@ def rename_lecture(
     if payload.description is not None:
         lecture.description = payload.description.strip()
     if payload.course_code is not None:
-        lecture.course_code = payload.course_code.strip()
+        c_clean = payload.course_code.strip()
+        lecture.course_code = c_clean if c_clean else None
+
+    # Update course_id if provided
+    fields_set = getattr(payload, "model_fields_set", None) or getattr(payload, "__fields_set__", set())
+    if "course_id" in fields_set:
+        if payload.course_id is not None:
+            target_c = db.query(Course).filter(Course.id == payload.course_id).first()
+            if not target_c:
+                raise HTTPException(status_code=404, detail=f"Course with ID {payload.course_id} does not exist.")
+            enr = db.query(CourseEnrollment).filter(
+                CourseEnrollment.course_id == payload.course_id,
+                CourseEnrollment.student_id == current_user.id,
+                CourseEnrollment.consent_granted.is_(True),
+                CourseEnrollment.status == "active"
+            ).first()
+            if not enr:
+                raise HTTPException(
+                    status_code=403,
+                    detail="You cannot associate a lecture with a course you are not actively enrolled in with granted consent."
+                )
+            lecture.course_id = target_c.id
+        else:
+            lecture.course_id = None
 
     # Update prerequisite_lecture_id if provided
-    fields_set = getattr(payload, "model_fields_set", None) or getattr(payload, "__fields_set__", set())
     if "prerequisite_lecture_id" in fields_set:
         validated_prereq_id = validate_prerequisite_lecture(
             db=db,
@@ -1212,6 +1484,7 @@ def rename_lecture(
         "id": lecture.id,
         "title": lecture.title,
         "course_code": lecture.course_code,
+        "course_id": lecture.course_id,
         "description": lecture.description,
         "prerequisite_lecture_id": prereq_id,
         "prerequisite_lecture_title": prereq_title
@@ -1238,6 +1511,19 @@ def delete_lecture(lecture_id: int, db: Session = Depends(get_db), current_user:
     db.query(Lecture).filter(Lecture.prerequisite_lecture_id == lecture_id).update(
         {"prerequisite_lecture_id": None}, synchronize_session=False
     )
+
+    # Archive misconceptions for this lecture before deleting lecture and concepts:
+    # preserve lecture title, mark archived, disassociate lecture_id and concept_id
+    db.query(Misconception).filter(Misconception.lecture_id == lecture_id).update(
+        {
+            "lecture_title": lecture.title,
+            "is_archived": True,
+            "lecture_id": None,
+            "concept_id": None,
+        },
+        synchronize_session=False
+    )
+    db.flush()
             
     db.delete(lecture)
     db.commit()

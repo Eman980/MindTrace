@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { api } from '../services/api';
-import type { Lecture } from '../types';
+import type { Lecture, StudentEnrollment } from '../types';
 import {
   UploadCloud,
   FileVideo,
@@ -9,7 +9,8 @@ import {
   AlertCircle,
   Loader2,
   ArrowRight,
-  Info
+  Info,
+  GraduationCap
 } from 'lucide-react';
 
 interface UploadPageProps {
@@ -38,7 +39,9 @@ const ALLOWED_MIME_TYPES = [
 export const UploadPage: React.FC<UploadPageProps> = ({ setActiveTab, onLectureCreated }) => {
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [title, setTitle] = useState('');
-  const [courseCode, setCourseCode] = useState('CS101');
+  const [courseCode, setCourseCode] = useState('');
+  const [selectedCourseId, setSelectedCourseId] = useState<string>('');
+  const [enrolledCourses, setEnrolledCourses] = useState<StudentEnrollment[]>([]);
   const [existingLectures, setExistingLectures] = useState<Lecture[]>([]);
   
   const [isDragging, setIsDragging] = useState(false);
@@ -65,6 +68,15 @@ export const UploadPage: React.FC<UploadPageProps> = ({ setActiveTab, onLectureC
     }).catch(() => {
       // Ignore background fetch error
     });
+
+    api.student.courses.list().then((courses) => {
+      if (isMounted && Array.isArray(courses)) {
+        setEnrolledCourses(courses.filter((c) => c.status === 'active' && c.consent_granted));
+      }
+    }).catch(() => {
+      // Ignore if student has no courses or not enrolled
+    });
+
     return () => { isMounted = false; };
   }, []);
 
@@ -73,7 +85,8 @@ export const UploadPage: React.FC<UploadPageProps> = ({ setActiveTab, onLectureC
     setCurrentStage(0);
     setSelectedFile(null);
     setTitle('');
-    setCourseCode('CS101');
+    setCourseCode('');
+    setSelectedCourseId('');
     setQualityWarning(null);
     setIsDuplicate(false);
     setDuplicateLectureData(null);
@@ -152,7 +165,12 @@ export const UploadPage: React.FC<UploadPageProps> = ({ setActiveTab, onLectureC
     try {
       const formData = new FormData();
       formData.append('title', title.trim());
-      formData.append('course_code', courseCode.trim() || 'CS101');
+      if (courseCode.trim()) {
+        formData.append('course_code', courseCode.trim());
+      }
+      if (selectedCourseId) {
+        formData.append('course_id', selectedCourseId);
+      }
       formData.append('description', '');
       formData.append('file', selectedFile);
 
@@ -490,6 +508,48 @@ export const UploadPage: React.FC<UploadPageProps> = ({ setActiveTab, onLectureC
             )}
           </div>
 
+          {/* Course Association Selector */}
+          <div className="form-group" style={{ marginBottom: '16px' }}>
+            <label className="form-label" style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+              <GraduationCap size={16} />
+              <span>Course Association</span>
+            </label>
+            <select
+              id="lecture-course-select"
+              className="form-input"
+              value={selectedCourseId}
+              onChange={(e) => {
+                const cId = e.target.value;
+                setSelectedCourseId(cId);
+                if (cId) {
+                  const c = enrolledCourses.find((item) => String(item.course_id) === cId);
+                  if (c && c.course_code) {
+                    setCourseCode(c.course_code);
+                  }
+                }
+              }}
+              style={{ background: 'var(--bg-main)' }}
+            >
+              <option value="">Independent Study (Private — No Teacher Access)</option>
+              {enrolledCourses.map((c) => (
+                <option key={c.course_id} value={c.course_id}>
+                  {c.title} {c.course_code ? `[${c.course_code}]` : ''} — Instructor: {c.teacher_name}
+                </option>
+              ))}
+            </select>
+            <div style={{ marginTop: '6px', fontSize: '12px' }}>
+              {!selectedCourseId ? (
+                <span style={{ color: 'var(--text-muted)' }}>
+                  🔒 <strong>Private Upload:</strong> This lecture will remain completely private to your personal library. No instructors have access.
+                </span>
+              ) : (
+                <span style={{ color: 'var(--primary-accent)' }}>
+                  🎓 <strong>Course Connected:</strong> Aggregated concept insights from this lecture will be shared with your instructor.
+                </span>
+              )}
+            </div>
+          </div>
+
           {/* Metadata fields */}
           <div style={{ display: 'grid', gridTemplateColumns: '3fr 1fr', gap: '16px', marginBottom: '20px' }}>
             <div className="form-group">
@@ -505,12 +565,12 @@ export const UploadPage: React.FC<UploadPageProps> = ({ setActiveTab, onLectureC
               />
             </div>
             <div className="form-group">
-              <label className="form-label">Course Code</label>
+              <label className="form-label">Course Code (Optional)</label>
               <input
                 id="lecture-course-input"
                 type="text"
                 className="form-input"
-                placeholder="CS101"
+                placeholder="e.g. CS101, MATH201"
                 value={courseCode}
                 onChange={(e) => setCourseCode(e.target.value)}
               />

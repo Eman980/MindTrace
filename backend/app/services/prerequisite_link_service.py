@@ -178,6 +178,8 @@ async def auto_detect_prerequisite_links(
     if not earlier_concepts_map:
         return 0
 
+    print(f"[PrereqLinks] Comparing lecture {new_lecture.id} ('{new_lecture.title}') against earlier lectures: { {lid: titles for lid, titles in earlier_concepts_map.items()} }")
+
     # Build prompt payload
     earlier_payload = [
         {"lecture_id": lid, "concepts": titles}
@@ -213,6 +215,7 @@ async def auto_detect_prerequisite_links(
             max_tokens=1024,
         )
         raw = response.choices[0].message.content or ""
+        print(f"[PrereqLinks] LLM raw response for lecture {new_lecture.id} ('{new_lecture.title}'): {raw[:500]}")
     except Exception as e:
         print(f"[PrereqLinks] Groq call failed: {e}")
         return 0
@@ -268,5 +271,18 @@ async def auto_detect_prerequisite_links(
     await delete_links_for_lecture(student_id, new_lecture.id)
     await save_prerequisite_links(docs)
     print(f"[PrereqLinks] Saved {len(docs)} links for lecture {new_lecture.id}.")
+
+    # ── Write lecture-level prerequisite back to SQLite ───────────────────────
+    # Pick the from_lecture_id with the highest confidence across all saved links.
+    try:
+        best = max(docs, key=lambda d: d.get("confidence", 0))
+        best_lid = best.get("from_lecture_id")
+        if best_lid and best_lid != new_lecture.id:
+            new_lecture.prerequisite_lecture_id = best_lid
+            db.commit()
+            print(f"[PrereqLinks] Set lecture {new_lecture.id}.prerequisite_lecture_id = {best_lid}")
+    except Exception as _db_err:
+        print(f"[PrereqLinks] Could not write prerequisite_lecture_id: {_db_err}")
+
     return len(docs)
 

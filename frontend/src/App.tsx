@@ -8,9 +8,10 @@ import { LecturesPage } from './pages/LecturesPage';
 import { UploadPage } from './pages/UploadPage';
 import { PlayerPage } from './pages/PlayerPage';
 import { MisconceptionsPage } from './pages/MisconceptionsPage';
-import { LedgerPage } from './pages/LedgerPage';
 import { ReviewPage } from './pages/ReviewPage';
 import { ProgressPage } from './pages/ProgressPage';
+import { TeacherDashboardPage } from './pages/TeacherDashboardPage';
+import { StudentCoursesPage } from './pages/StudentCoursesPage';
 import { api } from './services/api';
 
 // ─── Inner app that consumes AuthContext ──────────────────────────────────────
@@ -46,15 +47,15 @@ const AppInner: React.FC = () => {
       if (user) {
         // Only redirect to dashboard if we're still on unauthenticated tabs
         if (activeTab === 'landing' || activeTab === 'login' || activeTab === 'signup') {
-          setActiveTab('dashboard');
+          setActiveTab(user.role === 'teacher' ? 'teacher-dashboard' : 'dashboard');
         }
       }
     }
   }, [user, loading]);
 
-  // Refresh the unresolved badge whenever we're on a relevant tab
+  // Refresh the unresolved badge whenever we're on a relevant tab (students only)
   useEffect(() => {
-    if (user) {
+    if (user && user.role !== 'teacher') {
       api.misconceptions
         .stats()
         .then((s) => setUnresolvedCount(s.unresolved))
@@ -154,7 +155,13 @@ const AppInner: React.FC = () => {
       case 'landing':
         return <LandingPage setActiveTab={setActiveTab} />;
 
+      case 'teacher-dashboard':
+        return <TeacherDashboardPage />;
+
       case 'dashboard':
+        if (user?.role === 'teacher') {
+          return <TeacherDashboardPage />;
+        }
         return (
           <DashboardPage
             setActiveTab={setActiveTab}
@@ -195,14 +202,6 @@ const AppInner: React.FC = () => {
       case 'misconceptions':
         return <MisconceptionsPage onReviewConcept={handleReviewConcept} onGoToLecture={handleSelectLecture} />;
 
-      case 'ledger':
-        return (
-          <LedgerPage
-            onGoToLecture={handleSelectLecture}
-            onReviewConcept={handleReviewConcept}
-          />
-        );
-
       case 'review':
         if (!selectedMisconceptionId) {
           setActiveTab('misconceptions');
@@ -221,6 +220,9 @@ const AppInner: React.FC = () => {
 
       case 'progress':
         return <ProgressPage onGoToLecture={handleSelectLecture} />;
+
+      case 'courses':
+        return <StudentCoursesPage />;
 
 
       default:

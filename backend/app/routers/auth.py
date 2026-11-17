@@ -23,11 +23,17 @@ def signup(user_in: UserCreate, db: Session = Depends(get_db)):
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="An account with this email address already exists."
         )
+    role_to_set = (user_in.role or "student").strip().lower()
+    if role_to_set not in ("student", "teacher"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Role must be either 'student' or 'teacher'."
+        )
     user = User(
         email=user_in.email.lower(),
         hashed_password=get_password_hash(user_in.password),
         full_name=user_in.full_name,
-        role="student"
+        role=role_to_set
     )
     db.add(user)
     db.commit()

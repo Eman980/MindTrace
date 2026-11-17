@@ -1,6 +1,8 @@
 import json
 import httpx
 import re
+import asyncio
+import random
 from typing import List, Dict, Any, Optional
 from app.config import settings
 
@@ -213,6 +215,26 @@ class CheckpointService:
         }
 
     # ── UNIFIED LECTURE CHECKPOINT GENERATION ──────────────────────────────────
+
+    @staticmethod
+    def _target_count_for_concept(concept: Dict[str, Any], min_per_lecture: int, num_concepts: int) -> int:
+        """
+        Calculate how many questions to request for one concept:
+        - Base: 2 MCQ + 1 short = 3
+        - +1 per every 2 minutes of concept duration, capped at 6
+        - Lecture-level minimum: spread `min_per_lecture` evenly across concepts
+          so a single-concept lecture always requests at least min_per_lecture questions.
+        """
+        duration_secs = float(concept.get("end_time", 0)) - float(concept.get("start_time", 0))
+        duration_mins = max(0.0, duration_secs / 60.0)
+        base = 3  # 2 MCQ + 1 short
+        extra = int(duration_mins / 2)  # +1 per 2 minutes
+        per_concept_cap = 6
+        from_duration = min(base + extra, per_concept_cap)
+        # Spread lecture minimum across concepts (ceiling division)
+        from_minimum = -(-min_per_lecture // max(num_concepts, 1))  # ceil division
+        return max(from_duration, from_minimum)
+
     async def generate_lecture_checkpoints(
         self,
         concepts: List[Dict[str, Any]],
@@ -220,36 +242,32 @@ class CheckpointService:
         lecture_title: str = ""
     ) -> List[Dict[str, Any]]:
         """
-        Generates unified lecture checkpoints:
-        - ~4 MCQ (2 easy, 2 moderate)
-        - ~2 Short (1 easy, 1 moderate)
-        - ~2 Scenario (moderate)
-        Ordered: Easy first, then Moderate. Within difficulty, ordered by segment time.
-        Uses ONE LLM call if Groq/OpenAI available, else deterministic extractive NLP.
+        Generates diagnostic checkpoint questions per concept:
+          • Base: 2 MCQ + 1 short answer per concept
+          • +1 question per 2 minutes of concept duration, capped at 6 per concept
+          • Lecture-level minimum of 4 questions regardless of concept count
+          • All questions grounded in that concept's own transcript segment
+          • No placeholder / heuristic questions — fails loudly if LLM returns nothing
         """
         if not concepts:
             return []
 
-        # 1. Try LLM path if API key available and transcript exists
-        has_api_key = bool((self.groq_api_key and self.groq_api_key.strip()) or (self.api_key and self.api_key.strip()))
-        if has_api_key and full_transcript and len(full_transcript.strip()) > 30:
-            try:
-                llm_items = await self._generate_lecture_checkpoints_with_llm(
-                    concepts=concepts,
-                    full_transcript=full_transcript,
-                    lecture_title=lecture_title
-                )
-                if llm_items and len(llm_items) >= 3:
-                    return self._finalize_checkpoints(llm_items, concepts)
-            except Exception as e:
-                print(f"[CheckpointService] LLM lecture checkpoint error: {e}. Using deterministic fallback.")
+        has_api_key = bool(
+            (self.groq_api_key and self.groq_api_key.strip()) or
+            (self.api_key and self.api_key.strip())
+        )
+        if not has_api_key:
+            raise RuntimeError("Checkpoint generation failed: No AI API key configured.")
 
-        # 2. Deterministic extractive question generator grounded in transcript & concepts
-        return self._generate_extractive_lecture_checkpoints(
+        llm_items = await self._generate_lecture_checkpoints_with_llm(
             concepts=concepts,
             full_transcript=full_transcript,
             lecture_title=lecture_title
         )
+        if not llm_items:
+            raise RuntimeError("Checkpoint generation failed: LLM produced no valid questions.")
+
+        return self._finalize_checkpoints(llm_items, concepts)
 
     def _finalize_checkpoints(
         self,
@@ -257,18 +275,24 @@ class CheckpointService:
         concepts: List[Dict[str, Any]]
     ) -> List[Dict[str, Any]]:
         """
-        Validates, normalizes types/difficulties, and sorts checkpoints:
-        Easy first, then Moderate; within difficulty, by timestamp.
+        Validates, normalises, deduplicates, and sorts checkpoints.
+        Deduplication: drops any question whose normalised question_text is a
+        near-duplicate of an already-accepted question (first character-normalised
+        prefix match).
+        Sort order: MCQ first, then short/scenario; within type easy→moderate;
+        within difficulty by source_timestamp.
         """
         valid_concept_ids = {c["id"] for c in concepts if "id" in c}
         default_concept_id = concepts[0]["id"] if concepts and "id" in concepts[0] else 1
 
         cleaned = []
+        seen_q_texts: set = set()  # for deduplication
+
         for item in raw_items:
             q_type = str(item.get("question_type", "mcq")).lower().strip()
             if q_type in ["short_answer", "short"]:
                 q_type = "short"
-            elif q_type in ["scenario"]:
+            elif q_type == "scenario":
                 q_type = "scenario"
             else:
                 q_type = "mcq"
@@ -285,15 +309,25 @@ class CheckpointService:
             if not q_text:
                 continue
 
+            # Deduplication: compare normalised 80-character prefix
+            q_key = re.sub(r'\s+', ' ', q_text.lower())[:80]
+            if q_key in seen_q_texts:
+                continue
+            seen_q_texts.add(q_key)
+
+            correct = str(item.get("correct_answer", "")).strip()
+            if not correct:
+                # Must have a correct answer — skip questions the LLM forgot to fill in
+                continue
+
             options = item.get("options") or []
-            if q_type == "mcq" and (not options or len(options) < 2):
-                # Ensure 4 valid options for MCQ
-                correct = item.get("correct_answer", "Correct principle")
+            if q_type == "mcq" and len(options) < 2:
+                # Pad to 4 plausible distractors rather than drop the question
                 options = [
                     f"A. {correct}",
                     "B. Arbitrary unconstrained behavior",
                     "C. Inverted input/output contract",
-                    "D. Preconditions are not enforced"
+                    "D. Preconditions are not enforced",
                 ]
 
             ts = item.get("source_timestamp")
@@ -304,9 +338,8 @@ class CheckpointService:
             if end_ts is None and matching_c:
                 end_ts = matching_c.get("end_time")
 
-            excerpt = item.get("source_excerpt")
-            if excerpt and not str(excerpt).strip():
-                excerpt = None
+            excerpt = item.get("source_excerpt") or ""
+            excerpt = str(excerpt).strip() or None
 
             cleaned.append({
                 "concept_id": cid,
@@ -315,22 +348,20 @@ class CheckpointService:
                 "scenario_text": item.get("scenario_text") if q_type == "scenario" else None,
                 "question_text": q_text,
                 "options": options if q_type == "mcq" else [],
-                "correct_answer": str(item.get("correct_answer", "")).strip(),
+                "correct_answer": correct,
                 "explanation": str(item.get("explanation", "")).strip() or "Verified from lecture content.",
-                "source_excerpt": str(excerpt).strip() if excerpt else None,
+                "source_excerpt": excerpt,
                 "source_timestamp": float(ts) if ts is not None else None,
                 "source_end_timestamp": float(end_ts) if end_ts is not None else None,
                 "target_misconception": item.get("target_misconception"),
                 "item_family_role": item.get("item_family_role", "original"),
-                "is_review_checkpoint": bool(item.get("is_review_checkpoint", False))
+                "is_review_checkpoint": bool(item.get("is_review_checkpoint", False)),
             })
 
-        # Sort: All MCQs first (0), then short-answer/open-ended questions at the end (1)
-        # Within each question type: Easy first (0), then Moderate (1); within difficulty, by timestamp
         def sort_key(q):
             type_rank = 0 if q.get("question_type") == "mcq" else 1
             d_rank = 0 if q.get("difficulty") == "easy" else 1
-            return (type_rank, d_rank, q.get("source_timestamp", 0.0))
+            return (type_rank, d_rank, q.get("source_timestamp") or 0.0)
 
         sorted_items = sorted(cleaned, key=sort_key)
         for idx, q in enumerate(sorted_items):
@@ -344,98 +375,187 @@ class CheckpointService:
         full_transcript: str,
         lecture_title: str
     ) -> List[Dict[str, Any]]:
-        # Choose provider: Groq preferred if key exists, else OpenAI
+        """
+        Calls the LLM once per concept so the target question count and transcript
+        excerpt can be tailored precisely to that concept.
+
+        Per-concept target:
+          base = 2 MCQ + 1 short = 3 questions
+          +1 per 2 minutes of concept duration, capped at 6
+          lecture minimum of 4 questions spread across concepts
+
+        Rate-limit handling:
+          On HTTP 429 or transient 5xx, exponential backoff with jitter up to 4
+          attempts; on the second+ attempt a smaller/faster model is tried first.
+          If a concept batch exhausts all retries it raises RuntimeError.
+        """
+        # Choose provider + model list
         if self.groq_api_key and self.groq_api_key.strip():
             url = "https://api.groq.com/openai/v1/chat/completions"
             headers = {
                 "Authorization": f"Bearer {self.groq_api_key.strip()}",
-                "Content-Type": "application/json"
+                "Content-Type": "application/json",
             }
-            model_name = "llama-3.3-70b-versatile"
+            # Ordered by quality; on rate-limit retries we fall back down the list
+            models_to_try = [
+                "openai/gpt-oss-120b",
+                "qwen/qwen3.8-27b",
+                "openai/gpt-oss-20b",
+            ]
         elif self.api_key and self.api_key.strip():
             url = "https://api.openai.com/v1/chat/completions"
             headers = {
                 "Authorization": f"Bearer {self.api_key.strip()}",
-                "Content-Type": "application/json"
+                "Content-Type": "application/json",
             }
-            model_name = "gpt-4o-mini"
+            models_to_try = ["gpt-4o-mini"]
         else:
-            return []
+            raise RuntimeError("Checkpoint generation failed: No AI API key available.")
 
-        concept_summary = [
-            {
-                "id": c.get("id"),
-                "title": c.get("title"),
-                "description": c.get("description"),
-                "start_time": c.get("start_time", 0.0),
-                "core_concepts": c.get("core_concepts", [])
-            }
-            for c in concepts
-        ]
+        LECTURE_MIN = 4   # minimum questions for the whole lecture
+        MAX_PER_CONCEPT = 6
+        MAX_TRANSCRIPT_CHARS = 3000  # ~750 tokens — well within 8 k TPM limit
+        MAX_RETRIES = 4
 
-        prompt = (
-            "You are an expert computer science educator and exam designer for MindTrace FYP.\n"
-            f"Lecture Title: {lecture_title}\n"
-            f"Lecture Concepts:\n{json.dumps(concept_summary, indent=2)}\n\n"
-            f"Lecture Transcript (excerpt):\n{full_transcript[:4000]}\n\n"
-            "Task: Generate diagnostic checkpoint questions for this lecture grounded STRICTLY and ONLY in the transcript and concept segments.\n"
-            "Generate about 8 questions with this target breakdown:\n"
-            "1. Exactly 4 Multiple Choice Questions (question_type='mcq'):\n"
-            "   - 2 with difficulty='easy' (direct recall / recognition of definitions stated in the lecture)\n"
-            "   - 2 with difficulty='moderate' (applying or explaining the concept in a new situation)\n"
-            "   - options: list of 4 options ['A. ...', 'B. ...', 'C. ...', 'D. ...'] with 1 correct answer\n"
-            "   - correct_answer: the exact matching option string (e.g. 'A. ...')\n"
-            "2. Exactly 2 Short Answer Questions (question_type='short'):\n"
-            "   - 1 with difficulty='easy' (recall/state a definition in 1-2 sentences)\n"
-            "   - 1 with difficulty='moderate' (explain an operational mechanism or rule in 1-2 sentences)\n"
-            "   - options: []\n"
-            "   - correct_answer: concise 1-2 sentence model answer used for grading\n"
-            "3. Exactly 2 Scenario Questions (question_type='scenario'):\n"
-            "   - 2 with difficulty='moderate' (analyzing a practical code/system situation)\n"
-            "   - scenario_text: 2-3 line real-life or code scenario setting up the problem\n"
-            "   - question_text: question asking how to resolve or predict the outcome based on the lecture\n"
-            "   - options: []\n"
-            "   - correct_answer: concise 2-3 sentence model answer used for grading\n\n"
-            "Requirements for EVERY question:\n"
-            "- concept_id: integer id of the corresponding concept from the list above\n"
-            "- question_type: 'mcq' | 'short' | 'scenario'\n"
-            "- difficulty: 'easy' | 'moderate'\n"
-            "- scenario_text: 2-3 line string for scenario type, or null for mcq and short\n"
-            "- question_text: clear question text without trick wording\n"
-            "- options: 4 strings for mcq, [] for short and scenario\n"
-            "- correct_answer: string\n"
-            "- explanation: 1-2 sentence explanation grounded in the lecture\n"
-            "- source_excerpt: quotation from the transcript where this is taught\n"
-            "- source_timestamp: float seconds near where this is taught\n"
-            "- target_misconception: short phrase describing the potential misconception\n\n"
-            "Question Ordering:\n"
-            "List ALL MCQs first (questions with question_type='mcq'), followed by all short-answer (question_type='short') and scenario (question_type='scenario') questions at the end.\n\n"
-            "Return a valid JSON object with key 'checkpoints' containing the list of question objects."
-        )
+        num_concepts = len(concepts)
+        all_checkpoints: List[Dict[str, Any]] = []
 
-        payload = {
-            "model": model_name,
-            "messages": [
-                {"role": "system", "content": "You are a professional computer science examiner. You output only valid JSON."},
-                {"role": "user", "content": prompt}
-            ],
-            "response_format": {"type": "json_object"},
-            "temperature": 0.2
-        }
+        async with httpx.AsyncClient(timeout=120.0) as client:
+            for c_idx, concept in enumerate(concepts):
+                target = self._target_count_for_concept(concept, LECTURE_MIN, num_concepts)
 
-        async with httpx.AsyncClient(timeout=45.0) as client:
-            response = await client.post(url, headers=headers, json=payload)
-            if response.status_code == 200:
-                data = response.json()
-                content = data["choices"][0]["message"]["content"]
-                parsed = json.loads(content)
-                if isinstance(parsed, dict) and "checkpoints" in parsed:
-                    return parsed["checkpoints"]
-                elif isinstance(parsed, list):
-                    return parsed
-            else:
-                print(f"[CheckpointService] LLM API responded with {response.status_code}: {response.text}")
-        return []
+                # How many MCQ vs short to request
+                num_mcq = min(target, 2 + max(0, target - 3))  # 2 base MCQ, extras go to MCQ
+                num_short = target - num_mcq  # remainder as short-answer
+                # Clamp
+                num_mcq = max(2, min(num_mcq, MAX_PER_CONCEPT - 1))
+                num_short = max(1, target - num_mcq)
+
+                transcript_excerpt = (concept.get("transcript_text") or "")[:MAX_TRANSCRIPT_CHARS]
+
+                concept_summary = {
+                    "concept_id": concept.get("id", c_idx + 1),
+                    "title": concept.get("title", ""),
+                    "description": concept.get("description", ""),
+                    "start_time_seconds": concept.get("start_time", 0.0),
+                    "end_time_seconds": concept.get("end_time", 0.0),
+                    "core_concepts": concept.get("core_concepts", []),
+                    "transcript_excerpt": transcript_excerpt,
+                }
+
+                prompt = (
+                    f"You are an expert computer science educator writing diagnostic questions for MindTrace.\n"
+                    f"Lecture: {lecture_title}\n"
+                    f"Concept ({c_idx + 1}/{num_concepts}):\n"
+                    f"{json.dumps(concept_summary, indent=2)}\n\n"
+                    f"Generate exactly {target} checkpoint questions for THIS concept only:\n"
+                    f"  • {num_mcq} multiple-choice questions (question_type: 'mcq')\n"
+                    f"  • {num_short} short-answer question(s) (question_type: 'short')\n\n"
+                    "Rules — strictly follow all of them:\n"
+                    "1. Every question MUST be grounded in the transcript_excerpt above. "
+                    "   Do not invent facts not present in the transcript.\n"
+                    "2. Each MCQ needs exactly 4 options labelled 'A. ...', 'B. ...', 'C. ...', 'D. ...'.\n"
+                    "3. correct_answer for MCQ must be the full option string (e.g. 'A. ...').\n"
+                    "4. correct_answer for short-answer must be a concise model answer (1-3 sentences).\n"
+                    "5. No two questions may ask the same thing. Vary difficulty: "
+                    "   first MCQ easy, second MCQ moderate; first short easy, additional shorts moderate.\n"
+                    "6. source_excerpt: a short verbatim quote from the transcript excerpt.\n"
+                    "7. source_timestamp: float seconds within "
+                    f"[{concept.get('start_time', 0.0)}, {concept.get('end_time', 0.0)}].\n"
+                    "8. If the transcript is too short to support the full count, generate fewer — "
+                    "   but never invent content.\n\n"
+                    "Return ONLY a JSON object: {\"checkpoints\": [...]}"
+                )
+
+                concept_success = False
+                last_error: Optional[str] = None
+
+                for attempt in range(MAX_RETRIES):
+                    model_name = models_to_try[min(attempt, len(models_to_try) - 1)]
+                    payload = {
+                        "model": model_name,
+                        "messages": [
+                            {
+                                "role": "system",
+                                "content": (
+                                    "You are a professional computer science examiner. "
+                                    "Output only valid JSON with no markdown fences."
+                                ),
+                            },
+                            {"role": "user", "content": prompt},
+                        ],
+                        "response_format": {"type": "json_object"},
+                        "temperature": 0.3,
+                    }
+
+                    try:
+                        response = await client.post(url, headers=headers, json=payload)
+
+                        if response.status_code == 200:
+                            data = response.json()
+                            content = data["choices"][0]["message"]["content"]
+                            parsed = json.loads(content)
+                            if isinstance(parsed, dict):
+                                chks = parsed.get("checkpoints") or []
+                            elif isinstance(parsed, list):
+                                chks = parsed
+                            else:
+                                chks = []
+
+                            # Stamp concept_id on every item (LLM sometimes omits it)
+                            for q in chks:
+                                if not q.get("concept_id"):
+                                    q["concept_id"] = concept.get("id", c_idx + 1)
+
+                            if chks:
+                                all_checkpoints.extend(chks)
+                                concept_success = True
+                                break
+                            else:
+                                last_error = "LLM returned empty checkpoints list"
+                                wait = (2 ** attempt) + random.uniform(0.3, 1.0)
+                                await asyncio.sleep(wait)
+
+                        elif response.status_code == 429:
+                            # Rate limited — exponential backoff with jitter
+                            retry_after = None
+                            try:
+                                retry_after = float(
+                                    response.headers.get("retry-after", "")
+                                )
+                            except (ValueError, TypeError):
+                                pass
+                            wait = retry_after if retry_after else (
+                                (2 ** (attempt + 1)) + random.uniform(1.0, 3.0)
+                            )
+                            last_error = f"429 rate-limited (wait {wait:.1f}s)"
+                            await asyncio.sleep(wait)
+
+                        elif response.status_code in (500, 502, 503, 504):
+                            wait = (2 ** attempt) + random.uniform(0.5, 1.5)
+                            last_error = f"HTTP {response.status_code}"
+                            await asyncio.sleep(wait)
+
+                        else:
+                            last_error = f"HTTP {response.status_code}: {response.text[:200]}"
+                            break  # non-retryable
+
+                    except Exception as exc:
+                        last_error = str(exc)
+                        wait = (2 ** attempt) + random.uniform(0.5, 1.5)
+                        await asyncio.sleep(wait)
+
+                if not concept_success:
+                    raise RuntimeError(
+                        f"Checkpoint generation failed for concept '{concept.get('title', c_idx)}' "
+                        f"after {MAX_RETRIES} attempts. Last error: {last_error}"
+                    )
+
+                # Brief inter-concept pause to stay within TPM window
+                if c_idx < num_concepts - 1:
+                    await asyncio.sleep(1.2)
+
+        return all_checkpoints
 
     def _generate_extractive_lecture_checkpoints(
         self,

@@ -1,9 +1,11 @@
 import os
 import re
 import asyncio
+import random
 import httpx
 from typing import Dict, Any, List, Optional
 from app.config import settings
+from app.services.audio_processing_service import audio_processing_service
 
 SAMPLE_FUNCTION_TRANSCRIPT = [
     {
@@ -99,44 +101,21 @@ class TranscriptionService:
 
         return None
 
-    async def _transcribe_with_groq(
+    async def _transcribe_chunk_with_groq(
         self,
-        file_path: str,
-        audio_language: str = "en"
-    ) -> Optional[Dict[str, Any]]:
-        """
-        Transcribes or translates audio via Groq Cloud Whisper API.
-        For Urdu / Mixed Urdu-English:
-          Uses the /audio/translations endpoint with 'whisper-large-v3' (translates to English).
-          Note: 'whisper-large-v3-turbo' DOES NOT support translation on Groq.
-        For English:
-          Uses the /audio/transcriptions endpoint with 'whisper-large-v3'.
-        """
+        client: httpx.AsyncClient,
+        chunk_path: str,
+        offset_seconds: float,
+        audio_language: str,
+        semaphore: asyncio.Semaphore,
+        max_retries: int = 4
+    ) -> List[Dict[str, Any]]:
         groq_key = settings.GROQ_API_KEY.strip()
-        if not groq_key:
-            return None
-
-        if not os.path.exists(file_path):
-            return None
-
-        file_size = os.path.getsize(file_path)
-        # Groq payload limit is 25MB
-        if file_size > 25 * 1024 * 1024:
-            print(f"[GroqWhisper] File size {file_size} exceeds 25MB Groq limit; falling back to local model.")
-            return None
-
         is_urdu_or_mixed = audio_language.lower().strip() in ["ur", "urdu", "mixed", "ur-en", "urdu/mixed"]
+        url = "https://api.groq.com/openai/v1/audio/translations" if is_urdu_or_mixed else "https://api.groq.com/openai/v1/audio/transcriptions"
+        model_name = "whisper-large-v3"
 
-        if is_urdu_or_mixed:
-            # Translation endpoint converts Urdu speech to English text
-            url = "https://api.groq.com/openai/v1/audio/translations"
-            model_name = "whisper-large-v3"  # Only whisper-large-v3 supports translations on Groq!
-        else:
-            # Transcription endpoint for pure English lectures
-            url = "https://api.groq.com/openai/v1/audio/transcriptions"
-            model_name = "whisper-large-v3"
-
-        ext = os.path.splitext(file_path)[1].lower()
+        ext = os.path.splitext(chunk_path)[1].lower()
         mime_map = {
             ".wav": "audio/wav",
             ".mp3": "audio/mpeg",
@@ -146,63 +125,117 @@ class TranscriptionService:
             ".mp4": "video/mp4",
             ".mov": "video/quicktime",
         }
-        mime = mime_map.get(ext, "application/octet-stream")
+        mime = mime_map.get(ext, "audio/mpeg")
+        headers = {"Authorization": f"Bearer {groq_key}"}
 
-        headers = {
-            "Authorization": f"Bearer {groq_key}",
-        }
+        for attempt in range(max_retries):
+            try:
+                async with semaphore:
+                    with open(chunk_path, "rb") as f:
+                        files = {"file": (os.path.basename(chunk_path), f, mime)}
+                        data: Dict[str, Any] = {
+                            "model": model_name,
+                            "prompt": COMPUTER_SCIENCE_PROMPT,
+                            "temperature": "0",
+                            "response_format": "verbose_json",
+                        }
+                        if not is_urdu_or_mixed:
+                            data["language"] = "en"
+
+                        resp = await client.post(url, headers=headers, files=files, data=data)
+
+                if resp.status_code == 200:
+                    resp_json = resp.json()
+                    raw_segments = resp_json.get("segments", [])
+                    segments = []
+                    for seg in raw_segments:
+                        text = seg.get("text", "").strip()
+                        if text:
+                            segments.append({
+                                "start_time": round(float(seg.get("start", 0.0)) + offset_seconds, 2),
+                                "end_time": round(float(seg.get("end", 0.0)) + offset_seconds, 2),
+                                "text": text,
+                                "speaker": "Instructor",
+                            })
+                    return segments
+                elif resp.status_code in (429, 500, 502, 503, 504):
+                    wait_time = (2 ** attempt) + random.uniform(0.5, 1.5)
+                    print(f"[GroqWhisper Chunk] HTTP {resp.status_code}. Retrying chunk in {wait_time:.1f}s (attempt {attempt+1}/{max_retries})...")
+                    await asyncio.sleep(wait_time)
+                else:
+                    print(f"[GroqWhisper Chunk] HTTP {resp.status_code} error: {resp.text[:200]}")
+                    break
+            except Exception as e:
+                wait_time = (2 ** attempt) + random.uniform(0.5, 1.5)
+                print(f"[GroqWhisper Chunk] Request exception: {e}. Retrying in {wait_time:.1f}s...")
+                await asyncio.sleep(wait_time)
+
+        raise RuntimeError(f"Groq Whisper transcription failed for chunk {chunk_path} after {max_retries} retries.")
+
+    async def _transcribe_with_groq(
+        self,
+        file_path: str,
+        audio_language: str = "en",
+        detected_duration: Optional[float] = None
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Transcribes audio via Groq Cloud Whisper API.
+        Automatically chunks files exceeding ~10 minutes, runs with concurrency 2-3,
+        adds timestamp offsets to all segments, and retries with backoff.
+        """
+        groq_key = settings.GROQ_API_KEY.strip()
+        if not groq_key or not os.path.exists(file_path):
+            return None
+
+        # Split audio into ~10-minute chunks
+        chunks = audio_processing_service.split_audio_into_chunks(
+            file_path,
+            chunk_duration_sec=600,
+            total_duration=detected_duration
+        )
+        if not chunks:
+            return None
+
+        print(f"[GroqWhisper] Transcribing {len(chunks)} chunk(s) via Groq API (concurrency=2)...")
+        semaphore = asyncio.Semaphore(2)
 
         try:
-            print(f"[GroqWhisper] Sending audio to Groq ({model_name}, mode={'translation' if is_urdu_or_mixed else 'transcription'})...")
             async with httpx.AsyncClient(timeout=180.0) as client:
-                with open(file_path, "rb") as f:
-                    files = {"file": (os.path.basename(file_path), f, mime)}
-                    data: Dict[str, Any] = {
-                        "model": model_name,
-                        "prompt": COMPUTER_SCIENCE_PROMPT,
-                        "temperature": "0",  # Greedy decoding reduces silence hallucinations
-                        "response_format": "verbose_json",
-                    }
-                    if not is_urdu_or_mixed:
-                        data["language"] = "en"
+                # Transcribe chunks with concurrency limit
+                tasks = [
+                    self._transcribe_chunk_with_groq(
+                        client=client,
+                        chunk_path=c_path,
+                        offset_seconds=c_offset,
+                        audio_language=audio_language,
+                        semaphore=semaphore
+                    )
+                    for c_path, c_offset, _ in chunks
+                ]
+                results = await asyncio.gather(*tasks)
 
-                    response = await client.post(url, headers=headers, files=files, data=data)
+            # Stitch all segments in chronological order
+            all_segments: List[Dict[str, Any]] = []
+            for chunk_segs in results:
+                all_segments.extend(chunk_segs)
 
-            if response.status_code != 200:
-                print(f"[GroqWhisper] HTTP error {response.status_code}: {response.text}")
-                return None
+            # Re-index segments
+            for idx, seg in enumerate(all_segments):
+                seg["segment_index"] = idx
 
-            resp_json = response.json()
-            raw_segments = resp_json.get("segments", [])
-
-            segments = []
-            for idx, seg in enumerate(raw_segments):
-                text = seg.get("text", "").strip()
-                if text:
-                    segments.append({
-                        "start_time": round(float(seg.get("start", 0.0)), 2),
-                        "end_time": round(float(seg.get("end", 0.0)), 2),
-                        "text": text,
-                        "speaker": "Instructor",
-                        "segment_index": idx
-                    })
-
-            full_text = resp_json.get("text", "").strip()
-            if not full_text and segments:
-                full_text = " ".join(s["text"] for s in segments)
-
-            duration = float(resp_json.get("duration", segments[-1]["end_time"] if segments else 0.0))
+            full_text = " ".join(s["text"] for s in all_segments).strip()
+            total_dur = all_segments[-1]["end_time"] if all_segments else (detected_duration or 0.0)
 
             return {
-                "provider": f"Groq Whisper ({model_name} {'Translation' if is_urdu_or_mixed else 'Transcription'})",
+                "provider": "Groq Whisper (Chunked Cloud API)",
                 "full_text": full_text,
                 "word_count": len(full_text.split()),
-                "duration": round(duration, 2),
+                "duration": round(total_dur, 2),
                 "language": "en",
-                "segments": segments
+                "segments": all_segments
             }
         except Exception as e:
-            print(f"[GroqWhisper] API request failed: {e}. Falling back to local Faster-Whisper.")
+            print(f"[GroqWhisper] Chunked Groq transcription failed ({e}). Falling back to local model.")
             return None
 
     def _transcribe_locally_sync(
@@ -346,7 +379,7 @@ class TranscriptionService:
 
         # 3. Try Groq Whisper Cloud (fast, high accuracy, whisper-large-v3 translation)
         if settings.GROQ_API_KEY and settings.GROQ_API_KEY.strip():
-            groq_res = await self._transcribe_with_groq(file_path, audio_language=audio_language)
+            groq_res = await self._transcribe_with_groq(file_path, audio_language=audio_language, detected_duration=detected_duration)
             if groq_res:
                 groq_res["quality_warning"] = self.check_transcript_quality(groq_res["full_text"], groq_res["segments"])
                 return groq_res

@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { api } from '../services/api';
 import type { MisconceptionReviewData } from '../types';
+import { normalizeStatus } from '../utils/statusHelpers';
 import {
   ArrowLeft,
   Sparkles,
@@ -40,6 +41,8 @@ export const ReviewPage: React.FC<ReviewPageProps> = ({
     new_status: string;
     new_severity_level: string;
     new_severity_score: number;
+    new_current_score?: number;
+    new_peak_score?: number;
   } | null>(null);
 
   const loadReview = async () => {
@@ -124,9 +127,26 @@ export const ReviewPage: React.FC<ReviewPageProps> = ({
           <ArrowLeft size={14} />
           <span>Back to Misconceptions</span>
         </button>
-        <span className={`badge ${misconception.severity_level === 'High' ? 'badge-high' : misconception.severity_level === 'Medium' ? 'badge-medium' : 'badge-low'}`}>
-          Current Severity: {misconception.severity_level} ({misconception.severity_score}/100)
-        </span>
+        {(() => {
+          const revCurrent = misconception.current_score ?? misconception.severity_score ?? 0;
+          const revPeak = misconception.peak_score ?? revCurrent;
+          const revIsResolved = normalizeStatus(misconception.status) === 'Resolved';
+          const revDisplayLevel = revIsResolved && misconception.severity_level === 'High' ? 'Low' : misconception.severity_level;
+          const revSeverityLabel = revDisplayLevel === 'Low' ? 'Small mistake' : revDisplayLevel === 'Medium' ? 'Medium mistake' : 'Big mistake';
+
+          return (
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '4px' }}>
+              <span className={`badge ${revDisplayLevel === 'High' ? 'badge-high' : revDisplayLevel === 'Medium' ? 'badge-medium' : 'badge-low'}`}>
+                {revIsResolved ? 'Fixed' : revSeverityLabel} • score {revCurrent}{revPeak > revCurrent ? ` (peak ${revPeak})` : ''}
+              </span>
+              {revPeak > revCurrent && (
+                <span style={{ fontSize: '11px', color: '#15803D', fontWeight: 600 }}>
+                  Great progress! Your score decreased from {revPeak} to {revCurrent}.
+                </span>
+              )}
+            </div>
+          );
+        })()}
       </div>
 
       {/* Header Banner */}
@@ -205,10 +225,10 @@ export const ReviewPage: React.FC<ReviewPageProps> = ({
               Original Lecture Segment ({formatTime(data.concept_start_time)} - {formatTime(data.concept_end_time)})
             </h3>
           </div>
-          {onGoToLecture && (
+          {onGoToLecture && misconception.lecture_id && (
             <button
               className="btn btn-secondary btn-sm"
-              onClick={() => onGoToLecture(misconception.lecture_id)}
+              onClick={() => onGoToLecture(misconception.lecture_id!)}
             >
               Open in Player
             </button>
@@ -283,7 +303,7 @@ export const ReviewPage: React.FC<ReviewPageProps> = ({
                     sourceExcerpt={review_checkpoint.source_excerpt}
                     sourceTimestamp={review_checkpoint.source_timestamp}
                     sourceEndTimestamp={review_checkpoint.source_end_timestamp}
-                    onWatchThisPart={onGoToLecture && data?.misconception ? (ts) => onGoToLecture(data.misconception.lecture_id, ts) : undefined}
+                    onWatchThisPart={onGoToLecture && data?.misconception?.lecture_id ? (ts) => onGoToLecture(data.misconception.lecture_id!, ts) : undefined}
                   />
                 </div>
               </>
@@ -332,7 +352,7 @@ export const ReviewPage: React.FC<ReviewPageProps> = ({
                   {result.feedback_reason}
                 </p>
                 <div style={{ marginTop: '8px', fontSize: '13px', color: '#166534', fontWeight: 600 }}>
-                  Adjusted Severity: {result.new_severity_level} ({result.new_severity_score} points)
+                  Adjusted Severity: {result.new_severity_level} (score {result.new_current_score ?? result.new_severity_score})
                 </div>
               </div>
             )}

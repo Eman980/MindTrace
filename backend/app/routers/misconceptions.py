@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
-from sqlalchemy import desc
+from sqlalchemy import desc, func
 
 from app.database import get_db
 from app.config import settings
@@ -27,7 +27,7 @@ from app.schemas.all_schemas import (
 )
 from app.services.misconception_service import misconception_service
 from app.services.evaluation_service import evaluation_service
-from app.services.prerequisite_link_service import find_root_causes_for_misconceptions
+from app.services.prerequisite_link_service import find_root_causes_for_misconceptions, get_all_links_for_student
 from app.utils.security import get_current_user
 
 router = APIRouter(prefix="/misconceptions", tags=["Misconceptions"])
@@ -47,35 +47,36 @@ def _calculate_hours_since(dt: Optional[datetime]) -> float:
 @router.get("", response_model=List[MisconceptionOut])
 async def list_misconceptions(
     priority: Optional[str] = Query(None),       # High, Medium, Low
-    status_filter: Optional[str] = Query(None),  # Unresolved, Needs Review, In Progress, Resolved
+    status_filter: Optional[str] = Query(None),  # Unresolved, Needs Review, Improving, Resolved
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
     query = db.query(Misconception).filter(Misconception.user_id == current_user.id)
-    
+
     if priority and priority != "All":
         query = query.filter(Misconception.severity_level == priority.capitalize())
-        
+
     if status_filter and status_filter != "All":
         sf = status_filter.strip().lower()
+        status_col = func.lower(Misconception.status)
         if sf == "unresolved":
-            query = query.filter(Misconception.status.in_(["New", "Unresolved"]))
+            query = query.filter(status_col.in_(["new", "unresolved", "open"]))
         elif sf in ["needs review", "needs_review"]:
-            query = query.filter(Misconception.status.in_(["Needs Review", "Needs_Review"]))
+            query = query.filter(status_col.in_(["needs review", "needs_review"]))
         elif sf in ["in progress", "in_progress", "improving"]:
-            query = query.filter(Misconception.status.in_(["In Progress", "Improving", "in_progress"]))
+            query = query.filter(status_col.in_(["in progress", "in_progress", "improving"]))
         elif sf == "resolved":
-            query = query.filter(Misconception.status == "Resolved")
+            query = query.filter(status_col == "resolved")
         else:
             query = query.filter(Misconception.status.ilike(status_filter))
-            
+
     misconceptions = query.order_by(desc(Misconception.severity_score), desc(Misconception.last_detected)).all()
-    
+
     results = []
     for m in misconceptions:
-        lec = db.query(Lecture).filter(Lecture.id == m.lecture_id).first()
-        concept = db.query(Concept).filter(Concept.id == m.concept_id).first()
-        
+        lec = db.query(Lecture).filter(Lecture.id == m.lecture_id).first() if m.lecture_id else None
+        concept = db.query(Concept).filter(Concept.id == m.concept_id).first() if m.concept_id else None
+
         c_start = concept.start_time if concept else 0.0
         c_end = concept.end_time if concept else 0.0
         correct_exp = (concept.core_concepts[0] if (concept and concept.core_concepts) else "Master foundational definition and invariant relationships.")
@@ -85,9 +86,9 @@ async def list_misconceptions(
             "id": m.id,
             "user_id": m.user_id,
             "lecture_id": m.lecture_id,
-            "lecture_title": lec.title if lec else "Lecture",
+            "lecture_title": m.lecture_title or (lec.title if lec else "Past Lecture"),
             "concept_id": m.concept_id,
-            "concept_name": m.concept_name,
+            "concept_name": m.concept_name or (concept.title if concept else "Concept"),
             "title": m.title,
             "summary": m.summary,
             "incorrect_understanding": incorrect_und,
@@ -95,7 +96,9 @@ async def list_misconceptions(
             "concept_start_time": c_start,
             "concept_end_time": c_end,
             "severity_score": m.severity_score,
-            "severity_level": m.severity_level,
+            "current_score": m.severity_score,
+            "peak_score": m.peak_score if m.peak_score is not None else (m.severity_score or 0),
+            "severity_level": "Low" if (m.status or "").lower() == "resolved" else m.severity_level,
             "occurrence_count": m.occurrence_count,
             "status": m.status,
             "first_detected": m.first_detected,
@@ -105,6 +108,7 @@ async def list_misconceptions(
             "recurrence_count": m.recurrence_count or 0,
             "remediation_segment_id": m.remediation_segment_id,
             "resolved_at": m.resolved_at,
+            "is_archived": bool(m.is_archived),
             "evidence": [
                 {
                     "id": e.id,
@@ -154,16 +158,22 @@ def get_misconception_stats(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    all_misc = db.query(Misconception).filter(Misconception.user_id == current_user.id).all()
-    
+    all_misc = db.query(Misconception).filter(
+        Misconception.user_id == current_user.id,
+        (Misconception.is_archived == False) | (Misconception.is_archived.is_(None))
+    ).all()
+
+    def _st(m):
+        return (m.status or "").lower()
+
     total = len(all_misc)
-    high = sum(1 for m in all_misc if m.severity_level == "High" and m.status != "Resolved")
-    med = sum(1 for m in all_misc if m.severity_level == "Medium" and m.status != "Resolved")
-    low = sum(1 for m in all_misc if m.severity_level == "Low" and m.status != "Resolved")
-    unres = sum(1 for m in all_misc if m.status in ["New", "Unresolved"])
-    imp = sum(1 for m in all_misc if m.status == "Improving")
-    res = sum(1 for m in all_misc if m.status == "Resolved")
-    
+    high = sum(1 for m in all_misc if m.severity_level == "High" and _st(m) != "resolved")
+    med = sum(1 for m in all_misc if m.severity_level == "Medium" and _st(m) != "resolved")
+    low = sum(1 for m in all_misc if m.severity_level == "Low" and _st(m) != "resolved")
+    unres = sum(1 for m in all_misc if _st(m) in ["new", "unresolved", "open"])
+    imp = sum(1 for m in all_misc if _st(m) in ["improving", "in progress", "in_progress"])
+    res = sum(1 for m in all_misc if _st(m) == "resolved")
+
     return {
         "total_detected": total,
         "high_priority": high,
@@ -176,18 +186,20 @@ def get_misconception_stats(
 
 
 @router.get("/reprobe", response_model=List[ReprobeItemOut])
-def get_reprobe_items(
+async def get_reprobe_items(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
     """
     Returns items due for spaced reassessment/re-probing.
     Evaluates delay thresholds against configured MIN_DELAY_HOURS or DEMO_DELAY_HOURS.
+    Prerequisite concepts (things other concepts depend on) are sorted first.
     """
-    # Active misconceptions that are not resolved, or were marked Memorized / Recurred
+    # Active misconceptions that are not resolved and not archived
     misconceptions = db.query(Misconception).filter(
         Misconception.user_id == current_user.id,
-        Misconception.status != "Resolved"
+        (Misconception.is_archived == False) | (Misconception.is_archived.is_(None)),
+        func.lower(Misconception.status) != "resolved"
     ).order_by(desc(Misconception.severity_score)).all()
 
     delay_required = settings.effective_delay_hours
@@ -201,9 +213,11 @@ def get_reprobe_items(
         is_due = hours_elapsed >= delay_required or settings.USE_DEMO_DELAY
 
         # Find best checkpoint for re-probing this concept
-        checkpoints = db.query(Checkpoint).filter(
-            Checkpoint.concept_id == m.concept_id
-        ).order_by(desc(Checkpoint.is_review_checkpoint), Checkpoint.order_index).all()
+        checkpoints = []
+        if m.concept_id:
+            checkpoints = db.query(Checkpoint).filter(
+                Checkpoint.concept_id == m.concept_id
+            ).order_by(desc(Checkpoint.is_review_checkpoint), Checkpoint.order_index).all()
 
         reprobe_chk = None
         if checkpoints:
@@ -219,18 +233,20 @@ def get_reprobe_items(
                 "is_review_checkpoint": chosen.is_review_checkpoint,
             }
 
-        lec = db.query(Lecture).filter(Lecture.id == m.lecture_id).first()
+        lec = db.query(Lecture).filter(Lecture.id == m.lecture_id).first() if m.lecture_id else None
 
         results.append({
             "misconception_id": m.id,
             "concept_id": m.concept_id,
             "concept_name": m.concept_name,
             "lecture_id": m.lecture_id,
-            "lecture_title": lec.title if lec else "Lecture",
+            "lecture_title": m.lecture_title or (lec.title if lec else "Lecture"),
             "title": m.title,
             "evidence_status": m.evidence_status or ("Confirmed" if m.severity_score >= 4 else "Suspected"),
-            "severity_level": m.severity_level,
+            "severity_level": "Low" if (m.status or "").lower() == "resolved" else m.severity_level,
             "severity_score": m.severity_score,
+            "current_score": m.severity_score,
+            "peak_score": m.peak_score if m.peak_score is not None else (m.severity_score or 0),
             "last_detected": last_seen,
             "hours_since_last_seen": hours_elapsed,
             "required_delay_hours": delay_required,
@@ -238,17 +254,36 @@ def get_reprobe_items(
             "reprobe_checkpoint": reprobe_chk,
         })
 
+    # ── Prerequisite-first ordering ───────────────────────────────────────────
+    # Concepts that other concepts depend_on should be fixed first.
+    try:
+        all_links = await get_all_links_for_student(current_user.id)
+        # prerequisite_concepts = concept names that appear as "depends_on" in any link
+        prereq_concepts = {
+            lnk.get("depends_on", "").lower()
+            for lnk in all_links
+            if lnk.get("depends_on")
+        }
+        if prereq_concepts:
+            # Sort: prerequisites first (is_prereq=True → 0), dependents after (is_prereq=False → 1)
+            results.sort(
+                key=lambda r: (0 if r["concept_name"].lower() in prereq_concepts else 1)
+            )
+    except Exception as _sort_err:
+        print(f"[Reprobe] Non-fatal prereq sort error: {_sort_err}")
+
     return results
 
 
 @router.get("/ledger", response_model=List[MisconceptionLedgerItemOut])
-def get_misconception_ledger(
+async def get_misconception_ledger(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
     """
     Returns the comprehensive misconception ledger for the student,
     including evidence chain, explanation checks, and video remediation anchors.
+    Prerequisite concepts are sorted first.
     """
     misconceptions = db.query(Misconception).filter(
         Misconception.user_id == current_user.id
@@ -256,8 +291,8 @@ def get_misconception_ledger(
 
     results = []
     for m in misconceptions:
-        lec = db.query(Lecture).filter(Lecture.id == m.lecture_id).first()
-        concept = db.query(Concept).filter(Concept.id == m.concept_id).first()
+        lec = db.query(Lecture).filter(Lecture.id == m.lecture_id).first() if m.lecture_id else None
+        concept = db.query(Concept).filter(Concept.id == m.concept_id).first() if m.concept_id else None
 
         # Find all checkpoint attempts by this user for checkpoints in this concept
         concept_checkpoint_ids = [c.id for c in (concept.checkpoints if concept else [])]
@@ -283,13 +318,15 @@ def get_misconception_ledger(
             "id": m.id,
             "user_id": m.user_id,
             "lecture_id": m.lecture_id,
-            "lecture_title": lec.title if lec else "Lecture",
+            "lecture_title": m.lecture_title or (lec.title if lec else "Past Lecture"),
             "concept_id": m.concept_id,
             "concept_name": m.concept_name,
             "title": m.title,
             "summary": m.summary,
             "severity_score": m.severity_score,
-            "severity_level": m.severity_level,
+            "current_score": m.severity_score,
+            "peak_score": m.peak_score if m.peak_score is not None else (m.severity_score or 0),
+            "severity_level": "Low" if (m.status or "").lower() == "resolved" else m.severity_level,
             "occurrence_count": m.occurrence_count,
             "status": m.status,
             "first_detected": m.first_detected,
@@ -313,6 +350,21 @@ def get_misconception_ledger(
                 for e in m.evidence
             ]
         })
+
+    # ── Prerequisite-first ordering ───────────────────────────────────────────
+    try:
+        all_links = await get_all_links_for_student(current_user.id)
+        prereq_concepts = {
+            lnk.get("depends_on", "").lower()
+            for lnk in all_links
+            if lnk.get("depends_on")
+        }
+        if prereq_concepts:
+            results.sort(
+                key=lambda r: (0 if r["concept_name"].lower() in prereq_concepts else 1)
+            )
+    except Exception as _sort_err:
+        print(f"[Ledger] Non-fatal prereq sort error: {_sort_err}")
 
     return results
 
@@ -349,8 +401,8 @@ def export_evidence_csv(
     ).all()
 
     for m in misconceptions:
-        lec = db.query(Lecture).filter(Lecture.id == m.lecture_id).first()
-        lec_title = lec.title if lec else "Unknown Lecture"
+        lec = db.query(Lecture).filter(Lecture.id == m.lecture_id).first() if m.lecture_id else None
+        lec_title = m.lecture_title or (lec.title if lec else "Past Lecture")
         status_val = m.evidence_status or m.status
 
         for e in m.evidence:
@@ -387,21 +439,23 @@ def get_misconception_review(
     review_data = misconception_service.get_review_data(db, current_user.id, misconception_id)
     if not review_data:
         raise HTTPException(status_code=404, detail="Misconception not found.")
-        
+
     m = review_data["misconception"]
-    lec = db.query(Lecture).filter(Lecture.id == m.lecture_id).first()
-    
+    lec = db.query(Lecture).filter(Lecture.id == m.lecture_id).first() if m.lecture_id else None
+
     misc_out = {
         "id": m.id,
         "user_id": m.user_id,
         "lecture_id": m.lecture_id,
-        "lecture_title": lec.title if lec else "Lecture",
+        "lecture_title": m.lecture_title or (lec.title if lec else "Past Lecture"),
         "concept_id": m.concept_id,
         "concept_name": m.concept_name,
         "title": m.title,
         "summary": m.summary,
         "severity_score": m.severity_score,
-        "severity_level": m.severity_level,
+        "current_score": m.severity_score,
+        "peak_score": m.peak_score if m.peak_score is not None else (m.severity_score or 0),
+        "severity_level": "Low" if (m.status or "").lower() == "resolved" else m.severity_level,
         "occurrence_count": m.occurrence_count,
         "status": m.status,
         "first_detected": m.first_detected,
@@ -422,7 +476,7 @@ def get_misconception_review(
             for e in m.evidence
         ]
     }
-    
+
     chk_out = None
     if review_data["review_checkpoint"]:
         rc = review_data["review_checkpoint"]
@@ -436,7 +490,7 @@ def get_misconception_review(
             "order_index": rc.order_index,
             "is_review_checkpoint": rc.is_review_checkpoint
         }
-        
+
     return {
         "misconception": misc_out,
         "concept_title": review_data["concept_title"],
@@ -478,20 +532,22 @@ async def get_misconception_details_endpoint(
     if not misc:
         raise HTTPException(status_code=404, detail="Misconception not found.")
 
-    concept = db.query(Concept).filter(Concept.id == misc.concept_id).first()
-    lecture = db.query(Lecture).filter(Lecture.id == misc.lecture_id).first()
+    concept = db.query(Concept).filter(Concept.id == misc.concept_id).first() if misc.concept_id else None
+    lecture = db.query(Lecture).filter(Lecture.id == misc.lecture_id).first() if misc.lecture_id else None
 
     # Query all attempts for this concept by this student in chronological order
-    attempts_db = (
-        db.query(CheckpointAttempt)
-        .join(Checkpoint)
-        .filter(
-            Checkpoint.concept_id == misc.concept_id,
-            CheckpointAttempt.user_id == current_user.id
+    attempts_db = []
+    if misc.concept_id:
+        attempts_db = (
+            db.query(CheckpointAttempt)
+            .join(Checkpoint)
+            .filter(
+                Checkpoint.concept_id == misc.concept_id,
+                CheckpointAttempt.user_id == current_user.id
+            )
+            .order_by(CheckpointAttempt.created_at.asc())
+            .all()
         )
-        .order_by(CheckpointAttempt.created_at.asc())
-        .all()
-    )
 
     # Find the initial failed attempt
     first_bad = next((a for a in attempts_db if not a.is_correct), None)
@@ -532,7 +588,7 @@ async def get_misconception_details_endpoint(
             start = max(0, idx - 100)
             end = min(len(lt), idx + 250)
             transcript_snippet = "..." + lt[start:end].strip() + "..."
-    
+
     lecture_evidence = transcript_snippet if transcript_snippet else "Evidence not available"
 
     # Marked unresolved details
@@ -548,7 +604,7 @@ async def get_misconception_details_endpoint(
     today_str = datetime.now(timezone.utc).date().isoformat()
     recheck_str = misc.recheck_due.isoformat() if misc.recheck_due else None
     improving_str = misc.improving_at.isoformat() if misc.improving_at else None
-    
+
     if st == "resolved":
         next_reassessment_info = "Concept is successfully resolved through targeted reassessment. No pending reassessment."
     elif st == "improving":
@@ -615,7 +671,8 @@ async def get_misconception_details_endpoint(
         "concept_id": misc.concept_id,
         "concept_name": misc.concept_name,
         "lecture_id": misc.lecture_id,
-        "lecture_title": lecture.title if lecture else "Lecture",
+        "lecture_title": misc.lecture_title or (lecture.title if lecture else "Past Lecture"),
+        "is_archived": bool(misc.is_archived),
         "why_detected": why_detected,
         "original_question": orig_q,
         "student_wrong_answer": student_wrong,
@@ -627,8 +684,10 @@ async def get_misconception_details_endpoint(
         "marked_unresolved": is_unresolved,
         "marked_unresolved_reason": marked_unresolved_reason,
         "status": misc.status or "open",
-        "severity_level": misc.severity_level or "Medium",
+        "severity_level": "Low" if (misc.status or "").lower() == "resolved" else (misc.severity_level or "Medium"),
         "severity_score": misc.severity_score or 2,
+        "current_score": misc.severity_score or 2,
+        "peak_score": misc.peak_score if misc.peak_score is not None else (misc.severity_score or 0),
         "improving_at": improving_str,
         "recheck_due": recheck_str,
         "next_reassessment_info": next_reassessment_info,
@@ -665,7 +724,7 @@ async def resolve_misconception(
     )
     if not checkpoint:
         raise HTTPException(status_code=404, detail="Review checkpoint not found.")
-        
+
     eval_result = await evaluation_service.evaluate_answer(
         question_type=checkpoint.question_type,
         question_text=checkpoint.question_text,
@@ -673,20 +732,22 @@ async def resolve_misconception(
         student_answer=resolve_in.student_answer,
         explanation=checkpoint.explanation
     )
-    
+
     updated_misc = misconception_service.resolve_misconception_checkpoint(
         db=db,
         user_id=current_user.id,
         misconception_id=misconception_id,
         is_correct=eval_result["correct"]
     )
-    
+
     return {
         "is_correct": eval_result["correct"],
         "feedback_reason": eval_result.get("reason", ""),
         "new_status": updated_misc.status if updated_misc else "Unknown",
         "new_severity_level": updated_misc.severity_level if updated_misc else "Low",
         "new_severity_score": updated_misc.severity_score if updated_misc else 0,
+        "new_current_score": updated_misc.severity_score if updated_misc else 0,
+        "new_peak_score": updated_misc.peak_score if (updated_misc and updated_misc.peak_score is not None) else 0,
         "message": "Misconception updated based on review performance."
     }
 
@@ -707,4 +768,3 @@ def update_misconception_status(
         status_code=status.HTTP_403_FORBIDDEN,
         detail="Misconception status is strictly system-controlled based on assessment and reassessment results. Manual status modification is not permitted."
     )
-
