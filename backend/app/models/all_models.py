@@ -457,4 +457,104 @@ class CourseEnrollment(Base):
     )
 
 
+# ══════════════════════════════════════════════════════════════════════════════
+# Assessment Models (Complete Difficulty-Based Assessment System)
+# ══════════════════════════════════════════════════════════════════════════════
+
+class Assessment(Base):
+    __tablename__ = "assessments"
+
+    id = Column(Integer, primary_key=True, index=True)
+    lecture_id = Column(Integer, ForeignKey("lectures.id", ondelete="CASCADE"), nullable=False, index=True)
+    difficulty = Column(String(50), nullable=False, index=True)  # easy, moderate, hard
+    title = Column(String(255), nullable=False)
+    description = Column(Text, nullable=True)
+    _questions = Column("questions", Text, nullable=False)  # JSON-encoded array of 7 questions
+    created_at = Column(DateTime(timezone=True), default=utcnow)
+    updated_at = Column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+    lecture = relationship("Lecture")
+    attempts = relationship("AssessmentAttempt", back_populates="assessment", cascade="all, delete-orphan")
+
+    @property
+    def questions(self) -> list:
+        if self._questions:
+            try:
+                return json.loads(self._questions)
+            except Exception:
+                return []
+        return []
+
+    @questions.setter
+    def questions(self, value: list):
+        self._questions = json.dumps(value)
+
+
+class AssessmentAttempt(Base):
+    __tablename__ = "assessment_attempts"
+
+    id = Column(Integer, primary_key=True, index=True)
+    assessment_id = Column(Integer, ForeignKey("assessments.id", ondelete="CASCADE"), nullable=False, index=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    lecture_id = Column(Integer, ForeignKey("lectures.id", ondelete="CASCADE"), nullable=False, index=True)
+    difficulty = Column(String(50), nullable=False, index=True)
+    status = Column(String(50), default="in_progress")  # in_progress, submitted
+    _answers = Column("answers", Text, nullable=True)  # JSON-encoded dict {question_id: answer_str}
+    _results = Column("results", Text, nullable=True)  # JSON-encoded evaluation results
+    total_score = Column(Float, default=0.0)
+    max_score = Column(Float, default=35.0)
+    percentage = Column(Float, default=0.0)
+    mcq_correct_count = Column(Integer, default=0)
+    mcq_total_count = Column(Integer, default=4)
+    short_score = Column(Float, default=0.0)
+    short_max_score = Column(Float, default=15.0)
+    _feedback_summary = Column("feedback_summary", Text, nullable=True)  # JSON concepts_understood, revision, etc.
+    started_at = Column(DateTime(timezone=True), default=utcnow)
+    submitted_at = Column(DateTime(timezone=True), nullable=True)
+
+    assessment = relationship("Assessment", back_populates="attempts")
+    user = relationship("User")
+    lecture = relationship("Lecture")
+
+    @property
+    def answers(self) -> dict:
+        if self._answers:
+            try:
+                return json.loads(self._answers)
+            except Exception:
+                return {}
+        return {}
+
+    @answers.setter
+    def answers(self, value: dict):
+        self._answers = json.dumps(value)
+
+    @property
+    def results(self) -> list:
+        if self._results:
+            try:
+                return json.loads(self._results)
+            except Exception:
+                return []
+        return []
+
+    @results.setter
+    def results(self, value: list):
+        self._results = json.dumps(value)
+
+    @property
+    def feedback_summary(self) -> dict:
+        if self._feedback_summary:
+            try:
+                return json.loads(self._feedback_summary)
+            except Exception:
+                return {}
+        return {}
+
+    @feedback_summary.setter
+    def feedback_summary(self, value: dict):
+        self._feedback_summary = json.dumps(value)
+
+
+
 

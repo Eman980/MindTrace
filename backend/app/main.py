@@ -4,7 +4,7 @@ from contextlib import asynccontextmanager
 
 from app.config import settings
 from app.database import engine, Base
-from app.routers import auth, lectures, checkpoints, playback, misconceptions, dashboard, concepts, demo, workflow, disguise, teacher, student
+from app.routers import auth, lectures, checkpoints, playback, misconceptions, dashboard, concepts, demo, workflow, disguise, teacher, student, assessments
 from app.routers import canonical_progress
 import app.canonical  # registers the new tables before create_all
 from app.canonical import run_startup_link
@@ -68,6 +68,8 @@ app.include_router(teacher.router, prefix=settings.API_V1_PREFIX)
 app.include_router(teacher.router, prefix="")
 app.include_router(student.router, prefix=settings.API_V1_PREFIX)
 app.include_router(student.router, prefix="")
+app.include_router(assessments.router, prefix=settings.API_V1_PREFIX)
+app.include_router(assessments.router, prefix="")
 
 @app.get("/")
 def root():

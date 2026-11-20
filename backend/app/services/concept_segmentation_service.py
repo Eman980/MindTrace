@@ -129,9 +129,12 @@ class ConceptSegmentationService:
         if not self.api_key or not self.api_key.strip():
             raise RuntimeError("Concept extraction failed: GROQ_API_KEY is not configured.")
 
-        # Windowed segmentation
-        total_duration = duration or transcript_segments[-1]["end_time"]
-        window_size = 300.0  # ~5 minute windows to stay comfortably under token limits
+        # Windowed segmentation - ensure total_duration accounts for both video duration and transcript segments
+        last_seg_time = transcript_segments[-1]["end_time"] if transcript_segments else 0.0
+        total_duration = max(float(duration or 0.0), float(last_seg_time))
+        if total_duration <= 0.0:
+            total_duration = 300.0
+        window_size = 180.0  # ~3 minute windows to stay comfortably under token limits
 
         num_windows = max(1, int(total_duration // window_size) + (1 if total_duration % window_size > 45 else 0))
         print(f"[ConceptSegmentation] Partitioning {total_duration:.1f}s lecture into {num_windows} time window(s)...")
@@ -175,7 +178,7 @@ class ConceptSegmentationService:
         # Merge adjacent concepts that cover the same topic across or within windows
         merged_concepts = self._merge_adjacent_similar_concepts(all_extracted_concepts)
 
-        # Final cleanup: ensure contiguous order_index and valid timestamps
+        # Final cleanup: ensure contiguous order_index and valid timestamps covering full lecture
         final_concepts: List[Dict[str, Any]] = []
         for idx, c in enumerate(merged_concepts):
             c_start = max(0.0, float(c.get("start_time", 0.0)))
@@ -197,6 +200,37 @@ class ConceptSegmentationService:
                 "core_concepts": c.get("core_concepts", [f"Key insight for {title}."]),
                 "confusing_topics": c.get("confusing_topics", [f"Common misconception regarding {title}."])
             })
+
+        # Ensure complete coverage across full lecture:
+        # 1. First concept must start at 0.0
+        if final_concepts:
+            final_concepts[0]["start_time"] = 0.0
+
+        # 2. Seamless transitions between consecutive concepts (eliminate dead zones)
+        for i in range(1, len(final_concepts)):
+            prev = final_concepts[i - 1]
+            curr = final_concepts[i]
+            if curr["start_time"] > prev["end_time"]:
+                # If gap is small (<= 20s), extend previous concept to touch current
+                if curr["start_time"] - prev["end_time"] <= 20.0:
+                    prev["end_time"] = curr["start_time"]
+                else:
+                    mid = round((prev["end_time"] + curr["start_time"]) / 2.0, 2)
+                    prev["end_time"] = mid
+                    curr["start_time"] = mid
+            elif curr["start_time"] < prev["end_time"]:
+                prev["end_time"] = curr["start_time"]
+
+        # 3. Last concept MUST extend to total_duration so the whole video is covered
+        if final_concepts and total_duration > final_concepts[-1]["end_time"]:
+            final_concepts[-1]["end_time"] = round(total_duration, 2)
+            # Also attach any trailing transcript segments up to total_duration
+            trailing_texts = [
+                s["text"] for s in transcript_segments
+                if s.get("start_time", 0.0) >= final_concepts[-1]["start_time"]
+            ]
+            if trailing_texts:
+                final_concepts[-1]["transcript_text"] = " ".join(trailing_texts).strip()
 
         print(f"[ConceptSegmentation] Successfully generated {len(final_concepts)} concepts across full lecture (merged from {len(all_extracted_concepts)}).")
         return final_concepts
@@ -288,7 +322,7 @@ class ConceptSegmentationService:
             "You are an expert computer science curriculum analyst for the MindTrace FYP platform.\n"
             f"Lecture Title: {lecture_title}\n"
             f"Time Window: {window_start:.1f}s to {window_end:.1f}s\n"
-            "Analyze the following timestamped transcript segments for this time window and partition them into 1 to 2 distinct CONCEPT-LEVEL topics. If the window covers a single coherent subject, return exactly 1 concept; only return 2 if there is an explicit topic transition.\n"
+            "Analyze the following timestamped transcript segments for this time window and partition them into 2 to 4 distinct CONCEPT-LEVEL topics. Split on sub-topic changes (for example: definition, relationship, why it matters), not only on full subject changes.\n"
             "IMPORTANT Requirements:\n"
             "1. Each concept title must be a CONCISE topic name of 2-4 words (e.g. 'Binary Search Tree', 'Base Case Logic', 'Stack Frame Allocation'). NEVER use sentence fragments or generic titles like 'Introduction'.\n"
             "2. 'start_time' and 'end_time' must be floats bounded by the transcript segments provided.\n"
@@ -303,7 +337,7 @@ class ConceptSegmentationService:
             f"Window Segments:\n{compact_transcript}"
         )
 
-        models_to_try = ["openai/gpt-oss-120b", "qwen/qwen3.8-27b", "openai/gpt-oss-20b"]
+        models_to_try = ["openai/gpt-oss-20b", "openai/gpt-oss-120b", "qwen/qwen3.8-27b"]
 
         for attempt in range(max_retries):
             model_name = models_to_try[attempt % len(models_to_try)]

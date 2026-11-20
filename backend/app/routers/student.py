@@ -264,12 +264,20 @@ def get_course_associated_lectures(
         db, student_id=current_user.id, course_id=course_id
     )
 
-    return [
-        {
+    result = []
+    for lec in lectures:
+        prereq_title = None
+        if lec.prerequisite_lecture_id:
+            prereq = db.query(Lecture).filter(Lecture.id == lec.prerequisite_lecture_id).first()
+            if prereq:
+                prereq_title = prereq.title
+        result.append({
             "id": lec.id,
             "title": lec.title,
             "course_code": lec.course_code,
             "created_at": lec.created_at,
-        }
-        for lec in lectures
-    ]
+            "prerequisite_lecture_id": lec.prerequisite_lecture_id,
+            "prerequisite_lecture_title": prereq_title,
+        })
+
+    return result

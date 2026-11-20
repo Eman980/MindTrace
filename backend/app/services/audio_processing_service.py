@@ -61,6 +61,24 @@ class AudioProcessingService:
             except Exception:
                 pass
 
+            # Fallback to ffmpeg -i parsing for any media format
+            try:
+                import re
+                proc = subprocess.run(
+                    [self.ffmpeg_path, "-i", file_path],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    timeout=15
+                )
+                m = re.search(r"Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)", proc.stderr.decode(errors="replace"))
+                if m:
+                    h, mins, s = m.groups()
+                    val = int(h) * 3600 + int(mins) * 60 + float(s)
+                    if val > 0:
+                        return round(val, 2)
+            except Exception:
+                pass
+
         # 2. WAV: Standard wave library
         if ext == ".wav":
             try:

@@ -1,4 +1,4 @@
-from app.routers import auth, lectures, concepts, checkpoints, playback, misconceptions, dashboard, demo
+from app.routers import auth, lectures, concepts, checkpoints, playback, misconceptions, dashboard, demo, assessments
 
 __all__ = [
     "auth",
@@ -8,5 +8,6 @@ __all__ = [
     "playback",
     "misconceptions",
     "dashboard",
-    "demo"
+    "demo",
+    "assessments"
 ]

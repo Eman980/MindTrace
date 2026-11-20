@@ -146,7 +146,15 @@ class CheckpointEvaluationOut(BaseModel):
     detected_misconception_note: Optional[str] = None
     correct_answer: Optional[str] = None
     explanation: Optional[str] = None
-    points_awarded: int = 0
+    points_awarded: float = 0.0
+    score: Optional[float] = None
+    max_score: Optional[float] = None
+    percentage: Optional[float] = None
+    rubric_breakdown: Optional[List[Dict[str, Any]]] = None
+    what_understood: Optional[str] = None
+    what_missing: Optional[str] = None
+    what_needs_correction: Optional[str] = None
+    how_to_improve: Optional[str] = None
     misconception_created_or_updated: bool = False
     new_severity_level: Optional[str] = None
     grade: Optional[str] = None
@@ -648,6 +656,131 @@ class StudentEnrollmentOut(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Assessment Schemas (Complete Difficulty-Based Assessment System)
+# ══════════════════════════════════════════════════════════════════════════════
+
+class AssessmentQuestionOut(BaseModel):
+    id: str
+    type: str  # 'mcq' or 'short_answer'
+    difficulty: str  # 'easy', 'moderate', 'hard'
+    question_text: str
+    options: Optional[List[str]] = None  # ['A. ...', 'B. ...', 'C. ...', 'D. ...']
+    max_points: float = 5.0
+    concept_id: Optional[int] = None
+    concept_title: Optional[str] = None
+    source_timestamp: Optional[float] = None
+
+
+class AssessmentOut(BaseModel):
+    id: int
+    lecture_id: int
+    difficulty: str
+    title: str
+    description: str
+    total_questions: int
+    mcq_count: int
+    short_answer_count: int
+    max_score: float
+    questions: List[AssessmentQuestionOut]
+
+
+class AssessmentStartIn(BaseModel):
+    lecture_id: int
+    difficulty: str  # 'easy', 'moderate', 'hard'
+    retake: Optional[bool] = False
+
+
+class AssessmentSaveIn(BaseModel):
+    answers: Dict[str, str] = Field(default_factory=dict)  # {question_id: answer_str}
+
+
+class AssessmentSubmitIn(BaseModel):
+    answers: Dict[str, str] = Field(default_factory=dict)  # {question_id: answer_str}
+
+
+class RubricItemOut(BaseModel):
+    criterion: str
+    status: str  # 'correct', 'partial', 'missing', 'incorrect'
+    points_awarded: float
+    max_points: float
+    notes: Optional[str] = None
+
+
+class AssessmentQuestionResultOut(BaseModel):
+    question_id: str
+    question_text: str
+    type: str
+    difficulty: str
+    student_answer: str
+    correct_answer: str
+    explanation: Optional[str] = None
+    is_correct: bool
+    verdict: str  # 'correct', 'partial', 'incorrect'
+    score: float
+    max_score: float
+    percentage: float
+    feedback: str
+    rubric_breakdown: Optional[List[RubricItemOut]] = None
+    what_understood: Optional[str] = None
+    what_missing: Optional[str] = None
+    what_needs_correction: Optional[str] = None
+    how_to_improve: Optional[str] = None
+    concept_id: Optional[int] = None
+    concept_title: Optional[str] = None
+    remediation_timestamp: Optional[float] = None
+
+
+class RecommendedRevisionOut(BaseModel):
+    concept_id: Optional[int] = None
+    concept_title: str
+    timestamp: float
+    reason: str
+
+
+class AssessmentResultOut(BaseModel):
+    attempt_id: int
+    attempt_number: Optional[int] = 1
+    assessment_id: int
+    lecture_id: int
+    difficulty: str
+    status: str  # 'submitted'
+    total_score: float
+    max_score: float
+    percentage: float
+    mcq_correct_count: int
+    mcq_total_count: int
+    short_score: float
+    short_max_score: float
+    question_results: List[AssessmentQuestionResultOut]
+    concepts_understood: List[str]
+    concepts_partially_understood: List[str] = []
+    concepts_needing_improvement: List[str]
+    recommended_revision: List[RecommendedRevisionOut]
+    submitted_at: Optional[datetime] = None
+
+
+class AssessmentAttemptSummaryOut(BaseModel):
+    id: int
+    attempt_number: Optional[int] = 1
+    assessment_id: int
+    difficulty: str
+    status: str
+    total_score: float
+    max_score: float
+    percentage: float
+    submitted_at: Optional[datetime] = None
+    started_at: datetime
+
+
+class AssessmentStatusOut(BaseModel):
+    lecture_id: int
+    completed_difficulties: List[str]  # e.g. ['easy', 'moderate']
+    in_progress_attempt: Optional[Dict[str, Any]] = None
+    attempts: List[AssessmentAttemptSummaryOut]
+
 
 
 

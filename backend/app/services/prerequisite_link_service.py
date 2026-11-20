@@ -9,6 +9,7 @@ collection.  Missing data or LLM failures are logged and silently skipped
 
 import json
 import datetime
+import asyncio
 from typing import List, Dict, Any, Optional
 
 from sqlalchemy.orm import Session
@@ -139,67 +140,109 @@ async def delete_links_for_lecture(student_id: int, new_lecture_id: int) -> None
 
 # ── Core auto-link logic ──────────────────────────────────────────────────────
 
+def _extract_concept_summary(c: Concept) -> Dict[str, Any]:
+    info: Dict[str, Any] = {"title": c.title}
+    if c.description:
+        info["description"] = c.description[:300].strip()
+    core_c = getattr(c, "core_concepts", None)
+    if core_c:
+        info["key_topics"] = core_c[:5]
+    if c.transcript_text:
+        info["content_sample"] = c.transcript_text[:350].strip()
+    return info
+
+
 async def auto_detect_prerequisite_links(
     student_id: int,
     new_lecture: Lecture,
     db: Session,
 ) -> int:
     """
-    Called after a lecture finishes processing.
-    Compares new_lecture's concepts against all earlier lectures' concepts.
-    Returns the number of links saved (0 on any failure).
+    Called after a lecture's concepts are generated.
+    Analyzes new_lecture's concepts and taught content against all other lectures
+    belonging to this student using semantic pedagogy rules.
+    Detects bidirectional dependencies:
+    1. new_lecture depends on an existing lecture.
+    2. an existing lecture depends on new_lecture (reverse link).
+    Saves the detected prerequisite relationships to SQLite and MongoDB.
     """
-    # Gather new lecture concept titles
-    new_concepts: List[str] = [c.title for c in new_lecture.concepts if c.title]
-    if not new_concepts:
+    try:
+        db.refresh(new_lecture)
+    except Exception:
+        pass
+
+    new_concept_summaries = [_extract_concept_summary(c) for c in new_lecture.concepts if c.title]
+    if not new_concept_summaries:
         return 0
 
-    # Gather all earlier lectures' concepts for this student
-    earlier_lectures = (
+    # Gather library lectures for this student (exclude self and failed ones)
+    library_lectures = (
         db.query(Lecture)
         .filter(
             Lecture.user_id == student_id,
             Lecture.id != new_lecture.id,
-            Lecture.status == "ready",
+            Lecture.status != "failed",
         )
         .order_by(Lecture.created_at.asc())
         .all()
     )
-    if not earlier_lectures:
+    if not library_lectures:
         return 0
 
-    # Build a mapping: lecture_id → list of concept titles
-    earlier_concepts_map: Dict[int, List[str]] = {}
-    for lec in earlier_lectures:
-        titles = [c.title for c in lec.concepts if c.title]
-        if titles:
-            earlier_concepts_map[lec.id] = titles
+    earlier_payload = []
+    for lec in library_lectures:
+        c_summaries = [_extract_concept_summary(c) for c in lec.concepts if c.title]
+        if c_summaries:
+            earlier_payload.append({
+                "lecture_id": lec.id,
+                "title": lec.title,
+                "course_code": lec.course_code,
+                "concepts": c_summaries
+            })
 
-    if not earlier_concepts_map:
+    if not earlier_payload:
         return 0
 
-    print(f"[PrereqLinks] Comparing lecture {new_lecture.id} ('{new_lecture.title}') against earlier lectures: { {lid: titles for lid, titles in earlier_concepts_map.items()} }")
+    target_payload = {
+        "lecture_id": new_lecture.id,
+        "title": new_lecture.title,
+        "course_code": new_lecture.course_code,
+        "concepts": new_concept_summaries
+    }
 
-    # Build prompt payload
-    earlier_payload = [
-        {"lecture_id": lid, "concepts": titles}
-        for lid, titles in earlier_concepts_map.items()
-    ]
+    print(f"[PrereqLinks] Analyzing lecture {new_lecture.id} ('{new_lecture.title}') with {len(new_concept_summaries)} concepts against {len(earlier_payload)} library lectures.")
 
     prompt = (
-        "You are a learning-graph expert. Given a NEW lecture's concepts and "
-        "concepts from earlier lectures, identify prerequisite relationships.\n\n"
-        f"NEW LECTURE (id={new_lecture.id}):\n"
-        f"{json.dumps(new_concepts)}\n\n"
-        "EARLIER LECTURES:\n"
-        f"{json.dumps(earlier_payload)}\n\n"
-        "Return ONLY a JSON array. Each element:\n"
-        '{"concept": "<name from new lecture>", '
-        '"depends_on": "<name from earlier lecture>", '
-        '"from_lecture_id": <int>, '
-        '"confidence": <0.0-1.0>}\n'
-        "Only include pairs with confidence >= 0.6. "
-        "If no strong links exist, return []."
+        "You are an expert computer science curriculum and pedagogy analysis engine.\n"
+        "Analyze the provided lectures and identify true prerequisite relationships based on the actual "
+        "concepts and content taught in each lecture.\n\n"
+        "PEDAGOGICAL RULES:\n"
+        "1. Lecture A is a PREREQUISITE for Lecture B if Lecture B teaches advanced concepts that directly build "
+        "upon or require mastery of foundational concepts taught in Lecture A.\n"
+        "   Examples:\n"
+        "   - 'Recursion' requires 'Functions' (parameters, return values, call stack).\n"
+        "   - 'Dijkstra's Algorithm' / 'Bellman-Ford' requires 'Graph Traversals' (BFS/DFS, adjacency).\n"
+        "   - 'Dynamic Programming' requires 'Recursion' or 'Array Structures'.\n"
+        "2. Do NOT link lectures that merely belong to the same course or are independent side-by-side topics.\n"
+        "3. Match based on the actual concept descriptions and content taught, NOT superficial title keywords.\n"
+        "4. A lecture must NEVER be its own prerequisite.\n\n"
+        f"NEW LECTURE (Target):\n{json.dumps(target_payload, indent=2)}\n\n"
+        f"OTHER LECTURES IN STUDENT LIBRARY:\n{json.dumps(earlier_payload, indent=2)}\n\n"
+        "Determine:\n"
+        "A. Does NEW LECTURE depend on an existing lecture in the library as its prerequisite?\n"
+        "B. Does an existing lecture in the library depend on NEW LECTURE as its prerequisite?\n\n"
+        "Return ONLY a valid JSON array of objects. Format:\n"
+        '[\n'
+        '  {\n'
+        '    "lecture_id": <int id of the lecture that depends on the prerequisite>,\n'
+        '    "concept": "<name of advanced concept>",\n'
+        '    "prerequisite_lecture_id": <int id of foundational prerequisite lecture>,\n'
+        '    "depends_on": "<name of foundational prerequisite concept>",\n'
+        '    "confidence": <float: 0.0 to 1.0>\n'
+        '  }\n'
+        ']\n'
+        "Include ONLY strong, pedagogically valid pairs with confidence >= 0.70.\n"
+        "If no true prerequisite relationship exists, return []."
     )
 
     client = _get_groq_client()
@@ -208,9 +251,13 @@ async def auto_detect_prerequisite_links(
         return 0
 
     try:
-        response = client.chat.completions.create(
+        response = await asyncio.to_thread(
+            client.chat.completions.create,
             model="openai/gpt-oss-20b",
-            messages=[{"role": "user", "content": prompt}],
+            messages=[
+                {"role": "system", "content": "You are a computer science pedagogy engine. Output valid JSON arrays only, no markdown."},
+                {"role": "user", "content": prompt}
+            ],
             temperature=0.0,
             max_tokens=1024,
         )
@@ -236,53 +283,81 @@ async def auto_detect_prerequisite_links(
         print(f"[PrereqLinks] JSON parse error: {e} | raw={raw[:200]}")
         return 0
 
-    # Filter to confidence >= 0.6 and valid from_lecture_id
-    valid_lecture_ids = set(earlier_concepts_map.keys())
+    valid_lecture_ids = {lec["lecture_id"] for lec in earlier_payload} | {new_lecture.id}
     now_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
 
     docs = []
+    target_prereqs = []
+    other_prereqs: Dict[int, List[Dict[str, Any]]] = {}
+
     for item in parsed:
         try:
             confidence = float(item.get("confidence", 0))
-            from_lid = int(item.get("from_lecture_id", 0))
+            if confidence < 0.70:
+                continue
+
+            lec_id = int(item.get("lecture_id") or new_lecture.id)
+            prereq_id = int(item.get("prerequisite_lecture_id") or item.get("from_lecture_id") or 0)
             concept = str(item.get("concept", "")).strip()
             depends_on = str(item.get("depends_on", "")).strip()
-            if confidence < 0.6 or from_lid not in valid_lecture_ids:
+
+            if lec_id == prereq_id:
                 continue
-            if not concept or not depends_on:
+            if lec_id not in valid_lecture_ids or prereq_id not in valid_lecture_ids:
                 continue
-            docs.append({
-                "student_id": student_id,
-                "new_lecture_id": new_lecture.id,
-                "new_lecture_title": new_lecture.title,
-                "concept": concept,
-                "depends_on": depends_on,
-                "from_lecture_id": from_lid,
-                "confidence": confidence,
-                "created_at": now_iso,
-            })
+
+            if lec_id == new_lecture.id:
+                target_prereqs.append({"prerequisite_lecture_id": prereq_id, "confidence": confidence})
+                docs.append({
+                    "student_id": student_id,
+                    "new_lecture_id": new_lecture.id,
+                    "new_lecture_title": new_lecture.title,
+                    "concept": concept or "Advanced concept",
+                    "depends_on": depends_on or "Foundational concept",
+                    "from_lecture_id": prereq_id,
+                    "confidence": confidence,
+                    "created_at": now_iso,
+                })
+            elif prereq_id == new_lecture.id:
+                if lec_id not in other_prereqs:
+                    other_prereqs[lec_id] = []
+                other_prereqs[lec_id].append({"confidence": confidence})
         except Exception:
             continue
 
-    if not docs:
-        return 0
-
-    # Remove stale links for this lecture before saving new ones
-    await delete_links_for_lecture(student_id, new_lecture.id)
-    await save_prerequisite_links(docs)
-    print(f"[PrereqLinks] Saved {len(docs)} links for lecture {new_lecture.id}.")
+    if docs:
+        try:
+            await delete_links_for_lecture(student_id, new_lecture.id)
+            await save_prerequisite_links(docs)
+            print(f"[PrereqLinks] Saved {len(docs)} links for lecture {new_lecture.id}.")
+        except Exception as _doc_err:
+            print(f"[PrereqLinks] Non-fatal document save warning: {_doc_err}")
 
     # ── Write lecture-level prerequisite back to SQLite ───────────────────────
-    # Pick the from_lecture_id with the highest confidence across all saved links.
     try:
-        best = max(docs, key=lambda d: d.get("confidence", 0))
-        best_lid = best.get("from_lecture_id")
-        if best_lid and best_lid != new_lecture.id:
-            new_lecture.prerequisite_lecture_id = best_lid
+        updated_any = False
+        # 1. Update new_lecture with highest confidence prerequisite
+        if target_prereqs:
+            best_target = max(target_prereqs, key=lambda x: x["confidence"])
+            best_lid = best_target["prerequisite_lecture_id"]
+            if best_lid and best_lid != new_lecture.id:
+                new_lecture.prerequisite_lecture_id = best_lid
+                updated_any = True
+                print(f"[PrereqLinks] Set lecture {new_lecture.id} ('{new_lecture.title}').prerequisite_lecture_id = {best_lid}")
+
+        # 2. Update any other lecture in the library that depends on new_lecture
+        for other_lid, conf_list in other_prereqs.items():
+            other_lec = db.query(Lecture).filter(Lecture.id == other_lid, Lecture.user_id == student_id).first()
+            if other_lec and other_lec.prerequisite_lecture_id != new_lecture.id:
+                other_lec.prerequisite_lecture_id = new_lecture.id
+                updated_any = True
+                print(f"[PrereqLinks] Reverse-linked lecture {other_lec.id} ('{other_lec.title}').prerequisite_lecture_id = {new_lecture.id}")
+
+        if updated_any:
             db.commit()
-            print(f"[PrereqLinks] Set lecture {new_lecture.id}.prerequisite_lecture_id = {best_lid}")
+            db.refresh(new_lecture)
     except Exception as _db_err:
         print(f"[PrereqLinks] Could not write prerequisite_lecture_id: {_db_err}")
 
-    return len(docs)
+    return len(docs) + len(other_prereqs)
 
