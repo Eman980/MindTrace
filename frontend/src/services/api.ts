@@ -1,3 +1,4 @@
+
 import type {
   AuthResponse,
   DashboardStats,
@@ -22,10 +23,14 @@ import type {
   CourseJoinIn,
   StudentEnrollment,
   AssociatedLecture,
+  AssessmentStatus,
+  AssessmentStartResponse,
+  AssessmentResult,
+  AssessmentDifficulty,
 } from '../types';
 
 // Backend API URL
-const API_BASE = 'http://127.0.0.1:8001/api/v1';
+const API_BASE = (import.meta as any).env?.VITE_API_BASE || 'http://127.0.0.1:8000/api/v1';
 
 function getAuthHeader(): Record<string, string> {
   const token = localStorage.getItem('mindtrace_token');
@@ -57,7 +62,7 @@ async function request<T>(
     console.error('[API Network Error]', networkErr);
 
     throw new Error(
-      'Server connection error. Unable to connect to the MindTrace backend. Please ensure the backend is running at http://127.0.0.1:8001.'
+      'Server connection error. Unable to connect to the MindTrace backend. Please ensure the backend is running at http://127.0.0.1:8000.'
     );
   }
 
@@ -142,6 +147,18 @@ export const api = {
 
     get: (id: number) => request<Lecture>(`/lectures/${id}`),
 
+    getStatus: (id: number) =>
+      request<{
+        id: number;
+        title: string;
+        status: string;
+        processing_status: string;
+        progress: number;
+        error_message?: string | null;
+        concepts_count: number;
+        duration_seconds: number;
+      }>(`/lectures/${id}/status`),
+
     update: (
       id: number,
       data: {
@@ -197,6 +214,9 @@ export const api = {
         recording_id: number;
         title: string;
         status: string;
+        processing_status?: string;
+        progress?: number;
+        error_message?: string | null;
         duration_seconds: number;
         concepts_count: number;
         is_duplicate?: boolean;
@@ -481,5 +501,37 @@ export const api = {
       getAssociatedLectures: (courseId: number) =>
         request<AssociatedLecture[]>(`/student/courses/${courseId}/associated-lectures`),
     },
+  },
+
+  assessments: {
+    getStatus: (lectureId: number) =>
+      request<AssessmentStatus>(`/assessments/lecture/${lectureId}/status`),
+
+    start: (lectureId: number, difficulty: AssessmentDifficulty) =>
+      request<AssessmentStartResponse>('/assessments/start', {
+        method: 'POST',
+        body: JSON.stringify({ lecture_id: lectureId, difficulty }),
+      }),
+
+    retake: (lectureId: number, difficulty: AssessmentDifficulty) =>
+      request<AssessmentStartResponse>('/assessments/retake', {
+        method: 'POST',
+        body: JSON.stringify({ lecture_id: lectureId, difficulty, retake: true }),
+      }),
+
+    saveProgress: (attemptId: number, answers: Record<string, string>) =>
+      request<{ status: string; saved_count: number }>(`/assessments/${attemptId}/save`, {
+        method: 'POST',
+        body: JSON.stringify({ answers }),
+      }),
+
+    submit: (attemptId: number, answers: Record<string, string>) =>
+      request<AssessmentResult>(`/assessments/${attemptId}/submit`, {
+        method: 'POST',
+        body: JSON.stringify({ answers }),
+      }),
+
+    getAttempt: (attemptId: number) =>
+      request<AssessmentResult>(`/assessments/attempt/${attemptId}`),
   },
 };

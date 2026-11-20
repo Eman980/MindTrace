@@ -9,6 +9,7 @@ import type {
   PrerequisiteRecheckSubmitResult,
 } from '../types';
 import SpeedMenu from '../components/SpeedMenu';
+import AssessmentPanel from '../components/AssessmentPanel';
 import {
   Play,
   Pause,
@@ -223,6 +224,8 @@ export const PlayerPage: React.FC<PlayerPageProps> = ({
   const [activeQIndex, setActiveQIndex] = useState<number>(0);
   const [questionResults, setQuestionResults] = useState<Record<number, QuestionResult>>({});
   const [evaluating, setEvaluating] = useState<boolean>(false);
+  const [confidenceLevel, setConfidenceLevel] = useState<1 | 2 | 3 | null>(null);
+  const [whyText, setWhyText] = useState<string>('');
   const [showCompletionSummary, setShowCompletionSummary] = useState<boolean>(false);
   const [reviewMode, setReviewMode] = useState<boolean>(false);
   const [reviewIndex, setReviewIndex] = useState<number>(0);
@@ -239,7 +242,7 @@ export const PlayerPage: React.FC<PlayerPageProps> = ({
     result?: PrerequisiteRecheckSubmitResult;
     submitting?: boolean;
   }>>({});
-  const [assessmentMode, setAssessmentMode] = useState<'recheck' | 'checkpoints'>('recheck');
+  const [assessmentMode, setAssessmentMode] = useState<'recheck' | 'checkpoints' | 'assessment'>('checkpoints');
   const [regeneratingQuestions, setRegeneratingQuestions] = useState<boolean>(false);
   const [regenerateError, setRegenerateError] = useState<string | null>(null);
 
@@ -397,6 +400,7 @@ export const PlayerPage: React.FC<PlayerPageProps> = ({
     try {
       const data = await api.lectures.get(lectureId);
       setLecture(data);
+      initializeQuestionsFromLecture(data);
     } catch {
       // Ignore background sync errors
     }
@@ -411,8 +415,8 @@ export const PlayerPage: React.FC<PlayerPageProps> = ({
         try {
           const fresh = await api.lectures.get(lectureId);
           setLecture(fresh);
+          initializeQuestionsFromLecture(fresh);
           if (fresh.processing_status === 'ready' || fresh.status === 'ready') {
-            initializeQuestionsFromLecture(fresh);
             if (fresh.duration_seconds) setDuration(fresh.duration_seconds);
             clearInterval(pollTimer);
           } else if (fresh.processing_status === 'failed' || fresh.status === 'failed') {
@@ -421,21 +425,30 @@ export const PlayerPage: React.FC<PlayerPageProps> = ({
         } catch {
           // ignore background poll errors
         }
-      }, 3000);
+      }, 2000);
       return () => clearInterval(pollTimer);
     }
   }, [lecture?.processing_status, lecture?.status, lectureId]);
 
+  const getDiffRank = (diff?: string) => {
+    const d = (diff || 'easy').toLowerCase().trim();
+    if (d === 'hard') return 2;
+    if (d === 'moderate') return 1;
+    return 0;
+  };
+
   const sortQuestions = (items: QuestionItem[]): QuestionItem[] => {
     return [...items].sort((a, b) => {
-      const typeRankA = (a.question_type || 'mcq') === 'mcq' ? 0 : 1;
-      const typeRankB = (b.question_type || 'mcq') === 'mcq' ? 0 : 1;
-      if (typeRankA !== typeRankB) return typeRankA - typeRankB;
+      // 1. Group by concept chronological start time
+      const timeDiff = (a.conceptStartTime ?? 0) - (b.conceptStartTime ?? 0);
+      if (timeDiff !== 0) return timeDiff;
 
-      const diffRankA = (a.difficulty || 'easy').toLowerCase() === 'easy' ? 0 : 1;
-      const diffRankB = (b.difficulty || 'easy').toLowerCase() === 'easy' ? 0 : 1;
-      if (diffRankA !== diffRankB) return diffRankA - diffRankB;
+      // 2. Order by difficulty: easy -> moderate -> hard
+      const diffA = getDiffRank(a.difficulty);
+      const diffB = getDiffRank(b.difficulty);
+      if (diffA !== diffB) return diffA - diffB;
 
+      // 3. Fallback to order_index
       return (a.order_index ?? 0) - (b.order_index ?? 0);
     });
   };
@@ -514,10 +527,26 @@ export const PlayerPage: React.FC<PlayerPageProps> = ({
     setReviewMode(false);
     setReviewIndex(0);
     setQuestionResults({});
+    setConfidenceLevel(null);
+    setWhyText('');
     setSubtleWarning(null);
     setError(null);
     loadLecture();
   }, [lectureId]);
+
+  const isProcessing = Boolean(
+    lecture &&
+    (lecture.processing_status || lecture.status) !== 'ready' &&
+    (lecture.processing_status || lecture.status) !== 'failed'
+  );
+
+  useEffect(() => {
+    if (!isProcessing) return;
+    const interval = setInterval(() => {
+      loadLectureSilently();
+    }, 2000);
+    return () => clearInterval(interval);
+  }, [isProcessing, lectureId]);
 
   const concepts = lecture?.concepts || [];
   const activeConcept = concepts[activeConceptIndex] || null;
@@ -705,6 +734,12 @@ export const PlayerPage: React.FC<PlayerPageProps> = ({
       const result = await api.checkpoints.submitAnswer({
         checkpoint_id: currentQ.id,
         student_answer: answer.trim(),
+        ...(currentQ.question_type === 'mcq'
+          ? {
+              ...(confidenceLevel !== null ? { confidence_level: confidenceLevel } : {}),
+              ...(whyText.trim() ? { explanation_text: whyText.trim() } : {}),
+            }
+          : {}),
       });
 
       setQuestionResults((prev) => ({
@@ -737,6 +772,8 @@ export const PlayerPage: React.FC<PlayerPageProps> = ({
   };
 
   const handleTryAgain = (qId: number) => {
+    setConfidenceLevel(null);
+    setWhyText('');
     setQuestionResults((prev) => ({
       ...prev,
       [qId]: {
@@ -755,6 +792,8 @@ export const PlayerPage: React.FC<PlayerPageProps> = ({
   };
 
   const handlePrevQuestion = () => {
+    setConfidenceLevel(null);
+    setWhyText('');
     if (activeQIndex > 0) {
       setActiveQIndex(activeQIndex - 1);
       setShowCompletionSummary(false);
@@ -765,6 +804,8 @@ export const PlayerPage: React.FC<PlayerPageProps> = ({
   };
 
   const handleNextQuestion = () => {
+    setConfidenceLevel(null);
+    setWhyText('');
     if (activeQIndex < allQuestions.length - 1) {
       setActiveQIndex(activeQIndex + 1);
       setShowCompletionSummary(false);
@@ -778,6 +819,8 @@ export const PlayerPage: React.FC<PlayerPageProps> = ({
   };
 
   const handleJumpToQuestion = (idx: number) => {
+    setConfidenceLevel(null);
+    setWhyText('');
     setActiveQIndex(idx);
     setShowCompletionSummary(false);
     setReviewMode(false);
@@ -935,24 +978,80 @@ export const PlayerPage: React.FC<PlayerPageProps> = ({
               <span>Rename</span>
             </button>
 
-            {/* Prerequisite Lecture — Auto-detected, read-only */}
-            <div style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', fontSize: '12px', paddingLeft: '8px', borderLeft: '1px solid var(--border-subtle)' }}>
-              <span style={{ color: 'var(--text-muted)', fontWeight: 600 }}>Prerequisite:</span>
-              <span style={{
-                fontWeight: 700,
-                color: lecture.prerequisite_lecture_title ? 'var(--primary-navy)' : 'var(--text-muted)',
-                background: 'var(--bg-subtle)',
-                padding: '2px 8px',
-                borderRadius: 'var(--radius-sm)',
-                border: '1px solid var(--border-subtle)',
-                maxWidth: '180px',
-                overflow: 'hidden',
-                textOverflow: 'ellipsis',
-                whiteSpace: 'nowrap',
+            {/* Prerequisite Lecture Dependency Badge (Auto-Detected) */}
+            <div
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '6px',
                 fontSize: '12px',
-              }}>
-                {lecture.prerequisite_lecture_title || 'No prerequisite detected'}
-              </span>
+                paddingLeft: '8px',
+                borderLeft: '1px solid var(--border-subtle)',
+              }}
+            >
+              <span style={{ color: 'var(--text-muted)', fontWeight: 600 }}>Prerequisite:</span>
+              {(() => {
+                const isAnalyzing = lecture.status === 'processing' ||
+                  lecture.processing_status === 'analyzing_dependencies' ||
+                  lecture.processing_status === 'generating' ||
+                  lecture.processing_status === 'segmenting';
+
+                if (isAnalyzing) {
+                  return (
+                    <span
+                      style={{
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: '5px',
+                        color: 'var(--primary-accent)',
+                        fontSize: '12px',
+                        fontWeight: 600,
+                        background: 'var(--accent-soft)',
+                        padding: '2px 8px',
+                        borderRadius: 'var(--radius-sm)',
+                      }}
+                      title="MindTrace is currently analyzing lecture content and dependency links"
+                    >
+                      <RefreshCw size={11} className="spin-animation" />
+                      Analyzing dependencies...
+                    </span>
+                  );
+                }
+
+                const effectivePrereqTitle = lecture.prerequisite_lecture_title || prereqLecture?.title || null;
+                if (effectivePrereqTitle) {
+                  return (
+                    <span
+                      style={{
+                        fontWeight: 700,
+                        color: '#4338CA',
+                        background: '#EEF2FF',
+                        padding: '2px 8px',
+                        borderRadius: 'var(--radius-sm)',
+                        border: '1px solid #C7D2FE',
+                        maxWidth: '220px',
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                        whiteSpace: 'nowrap',
+                        fontSize: '12px',
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: '4px'
+                      }}
+                      title={`Automatically detected prerequisite: ${effectivePrereqTitle}`}
+                    >
+                      <BookOpen size={12} color="#4F46E5" />
+                      {effectivePrereqTitle}
+                    </span>
+                  );
+                }
+
+                return (
+                  <span style={{ color: 'var(--text-muted)', fontSize: '12px', fontWeight: 500 }}>
+                    None (Standalone)
+                  </span>
+                );
+              })()}
             </div>
           </div>
         </div>
@@ -995,14 +1094,9 @@ export const PlayerPage: React.FC<PlayerPageProps> = ({
         >
           <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
             <RefreshCw className="animate-spin" size={16} color="#2563EB" style={{ animation: 'spin 2s linear infinite' }} />
-            <div>
-              <span style={{ fontSize: '13px', fontWeight: 700, color: '#1E40AF', textTransform: 'capitalize' }}>
-                Pipeline Status: {lecture.processing_status || lecture.status}... ({lecture.progress || 0}%)
-              </span>
-              <div style={{ fontSize: '11px', color: '#3B82F6', marginTop: '2px' }}>
-                Extracting acoustic stream, transcribing with Groq Whisper, and generating concept checkpoints.
-              </div>
-            </div>
+            <span style={{ fontSize: '13px', fontWeight: 700, color: '#1E40AF' }}>
+              Processing your lecture... ({lecture.progress || 0}%)
+            </span>
           </div>
           <span style={{ fontSize: '11px', color: '#60A5FA', fontFamily: 'JetBrains Mono' }}>
             Auto-refreshing
@@ -1065,22 +1159,45 @@ export const PlayerPage: React.FC<PlayerPageProps> = ({
         </div>
       )}
 
-      {/* Prerequisite Warning Banner — auto-detected, read-only */}
-      {lecture.prerequisite_lecture_id && (
-        <div style={{
-          display: 'flex', alignItems: 'center', gap: '10px',
-          background: prereqLecture && prereqLecture.unresolved_count > 0 ? '#FFF7ED' : '#F0FDF4',
-          border: `1px solid ${prereqLecture && prereqLecture.unresolved_count > 0 ? '#FED7AA' : '#BBF7D0'}`,
-          borderRadius: 'var(--radius-md)', padding: '12px 16px', marginBottom: '16px', fontSize: '13px',
-        }}>
-          <BookOpen size={16} color={prereqLecture && prereqLecture.unresolved_count > 0 ? '#D97706' : '#16A34A'} style={{ flexShrink: 0 }} />
-          <span style={{ color: prereqLecture && prereqLecture.unresolved_count > 0 ? '#78350F' : '#166534', fontWeight: 600 }}>
-            {prereqLecture && prereqLecture.unresolved_count > 0
-              ? `This lecture builds on "${lecture.prerequisite_lecture_title}". You have ${prereqLecture.unresolved_count} unresolved misconception(s) there. Review it first.`
-              : `This lecture builds on "${lecture.prerequisite_lecture_title}".`}
-          </span>
-        </div>
-      )}
+      {/* Prerequisite Warning & Dependency Banner */}
+      {lecture.prerequisite_lecture_id && (() => {
+        // How many checkpoint questions of the prerequisite lecture the student has actually answered
+        const prereqAnswered = (prereqLecture?.concepts || [])
+          .flatMap((c) => c.checkpoints || [])
+          .filter((q) => q.latest_attempt).length;
+        const prereqUnresolved = prereqLecture?.unresolved_count || 0;
+
+        // 3 states: unresolved issues (orange), answered & fine (green), not answered yet (grey)
+        const state: 'issues' | 'good' | 'unchecked' =
+          prereqUnresolved > 0 ? 'issues' : prereqAnswered > 0 ? 'good' : 'unchecked';
+
+        const palette = {
+          issues: { bg: '#FFF7ED', border: '#FED7AA', icon: '#D97706', text: '#78350F' },
+          good: { bg: '#F0FDF4', border: '#BBF7D0', icon: '#16A34A', text: '#166534' },
+          unchecked: { bg: '#F8FAFC', border: '#E2E8F0', icon: '#64748B', text: '#334155' },
+        }[state];
+
+        const message =
+          state === 'issues'
+            ? `This lecture builds on "${lecture.prerequisite_lecture_title}". You have ${prereqUnresolved} unresolved misconception(s) there. Review it first.`
+            : state === 'good'
+            ? `This lecture builds on prerequisite lecture "${lecture.prerequisite_lecture_title}". All prerequisite concepts are in good standing.`
+            : `This lecture builds on prerequisite lecture "${lecture.prerequisite_lecture_title}". You haven't answered its questions yet, so your understanding of those concepts is not checked.`;
+
+        return (
+          <div style={{
+            display: 'flex', alignItems: 'center', gap: '10px',
+            background: palette.bg,
+            border: `1px solid ${palette.border}`,
+            borderRadius: 'var(--radius-md)', padding: '12px 16px', marginBottom: '16px', fontSize: '13px',
+          }}>
+            <BookOpen size={16} color={palette.icon} style={{ flexShrink: 0 }} />
+            <span style={{ color: palette.text, fontWeight: 600 }}>
+              {message}
+            </span>
+          </div>
+        );
+      })()}
 
       {/* Visible control when assessment is hidden */}
       {!showAssessment && (
@@ -1549,52 +1666,92 @@ export const PlayerPage: React.FC<PlayerPageProps> = ({
             </div>
           </div>
 
-          {/* Prerequisite vs Lecture Checkpoints Tab Switcher (when rechecks exist) */}
-          {rechecks.length > 0 && (
-            <div style={{ display: 'flex', gap: '6px', marginBottom: '12px', background: 'var(--bg-subtle)', padding: '4px', borderRadius: 'var(--radius-md)' }}>
+          {/* Assessment Mode Switcher: Checkpoints vs Difficulty Assessment */}
+          <div style={{ display: 'flex', gap: '6px', marginBottom: '14px', background: 'var(--bg-subtle, #F1F5F9)', padding: '4px', borderRadius: 'var(--radius-md, 8px)' }}>
+            {rechecks.length > 0 && (
               <button
                 type="button"
                 id="btn-tab-recheck"
                 onClick={() => setAssessmentMode('recheck')}
                 style={{
                   flex: 1,
-                  padding: '6px 10px',
-                  borderRadius: 'var(--radius-sm)',
+                  padding: '7px 10px',
+                  borderRadius: 'var(--radius-sm, 6px)',
                   fontSize: '11px',
                   fontWeight: assessmentMode === 'recheck' ? 800 : 600,
                   border: 'none',
-                  background: assessmentMode === 'recheck' ? 'var(--accent-purple)' : 'transparent',
-                  color: assessmentMode === 'recheck' ? '#FFFFFF' : 'var(--text-muted)',
+                  background: assessmentMode === 'recheck' ? 'var(--accent-purple, #4F46E5)' : 'transparent',
+                  color: assessmentMode === 'recheck' ? '#FFFFFF' : 'var(--text-muted, #64748B)',
                   cursor: 'pointer',
                   transition: 'all 0.15s ease'
                 }}
               >
-                Prerequisite Re-Check ({rechecks.length})
+                Re-Check ({rechecks.length})
               </button>
-              <button
-                type="button"
-                id="btn-tab-checkpoints"
-                onClick={() => setAssessmentMode('checkpoints')}
-                style={{
-                  flex: 1,
-                  padding: '6px 10px',
-                  borderRadius: 'var(--radius-sm)',
-                  fontSize: '11px',
-                  fontWeight: assessmentMode === 'checkpoints' ? 800 : 600,
-                  border: 'none',
-                  background: assessmentMode === 'checkpoints' ? 'var(--accent-purple)' : 'transparent',
-                  color: assessmentMode === 'checkpoints' ? '#FFFFFF' : 'var(--text-muted)',
-                  cursor: 'pointer',
-                  transition: 'all 0.15s ease'
-                }}
-              >
-                Lecture Checkpoints ({allQuestions.length})
-              </button>
+            )}
+            <button
+              type="button"
+              id="btn-tab-checkpoints"
+              onClick={() => setAssessmentMode('checkpoints')}
+              style={{
+                flex: 1,
+                padding: '7px 10px',
+                borderRadius: 'var(--radius-sm, 6px)',
+                fontSize: '11px',
+                fontWeight: assessmentMode === 'checkpoints' ? 800 : 600,
+                border: 'none',
+                background: assessmentMode === 'checkpoints' ? 'var(--accent-purple, #4F46E5)' : 'transparent',
+                color: assessmentMode === 'checkpoints' ? '#FFFFFF' : 'var(--text-muted, #64748B)',
+                cursor: 'pointer',
+                transition: 'all 0.15s ease'
+              }}
+            >
+              Checkpoints ({allQuestions.length})
+            </button>
+            <button
+              type="button"
+              id="btn-tab-difficulty-assessment"
+              onClick={() => setAssessmentMode('assessment')}
+              style={{
+                flex: 1.1,
+                padding: '7px 10px',
+                borderRadius: 'var(--radius-sm, 6px)',
+                fontSize: '11px',
+                fontWeight: assessmentMode === 'assessment' ? 800 : 600,
+                border: 'none',
+                background: assessmentMode === 'assessment' ? 'var(--accent-purple, #4F46E5)' : 'transparent',
+                color: assessmentMode === 'assessment' ? '#FFFFFF' : 'var(--text-muted, #64748B)',
+                cursor: 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: '5px',
+                transition: 'all 0.15s ease'
+              }}
+            >
+              <Award size={13} />
+              Final Assessment
+            </button>
+          </div>
+
+          {/* FINAL ASSESSMENT AREA: Preserved in DOM across tab switching */}
+          {lecture && (
+            <div style={{ display: assessmentMode === 'assessment' ? 'block' : 'none', marginBottom: '14px' }}>
+              <div className="card" style={{ padding: '4px', border: '1px solid #E2E8F0', background: '#FAFAFF' }}>
+                <AssessmentPanel
+                  lectureId={lecture.id}
+                  lectureTitle={lecture.title}
+                  courseCode={lecture.course_code || undefined}
+                  concepts={lecture.concepts || []}
+                  onSeekToTimestamp={(sec) => handleSeek(sec)}
+                  onBackToLecture={() => setAssessmentMode('checkpoints')}
+                />
+              </div>
             </div>
           )}
 
-          {/* CHECKPOINT AREA: Toggle between Question View and Completion Summary */}
-          {showCompletionSummary ? (
+          {/* CHECKPOINT AREA: Checkpoints Question View & Completion Summary */}
+          {assessmentMode !== 'assessment' && (showCompletionSummary ? (
             reviewMode ? (
               /* ==============================================================
                  Dedicated Incorrect Answers Review Mode
@@ -1674,8 +1831,38 @@ export const PlayerPage: React.FC<PlayerPageProps> = ({
                       <div>
                         {/* Concept & Seek to concept button */}
                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 10px', background: '#FFFFFF', borderRadius: '6px', border: '1px solid #E2E8F0', marginBottom: '12px' }}>
-                          <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
-                            Concept: <strong style={{ color: 'var(--primary-navy)' }}>{currentReviewQ.conceptTitle}</strong>
+                          <span style={{ fontSize: '12px', color: 'var(--text-muted)', display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+                            <span>Concept: <strong style={{ color: 'var(--primary-navy)' }}>{currentReviewQ.conceptTitle}</strong></span>
+                            <span
+                              style={{
+                                fontSize: '10px',
+                                fontWeight: 800,
+                                textTransform: 'uppercase',
+                                padding: '1px 6px',
+                                borderRadius: 'var(--radius-full)',
+                                background:
+                                  (currentReviewQ.difficulty || 'easy').toLowerCase() === 'hard'
+                                    ? '#FEE2E2'
+                                    : (currentReviewQ.difficulty || 'easy').toLowerCase() === 'moderate'
+                                    ? '#FEF3C7'
+                                    : '#DCFCE7',
+                                color:
+                                  (currentReviewQ.difficulty || 'easy').toLowerCase() === 'hard'
+                                    ? '#B91C1C'
+                                    : (currentReviewQ.difficulty || 'easy').toLowerCase() === 'moderate'
+                                    ? '#B45309'
+                                    : '#15803D',
+                                border: `1px solid ${
+                                  (currentReviewQ.difficulty || 'easy').toLowerCase() === 'hard'
+                                    ? '#FCA5A5'
+                                    : (currentReviewQ.difficulty || 'easy').toLowerCase() === 'moderate'
+                                    ? '#FDE68A'
+                                    : '#86EFAC'
+                                }`,
+                              }}
+                            >
+                              {(currentReviewQ.difficulty || 'easy').toUpperCase()}
+                            </span>
                           </span>
                           <button
                             type="button"
@@ -2063,9 +2250,9 @@ export const PlayerPage: React.FC<PlayerPageProps> = ({
                       className="btn btn-secondary btn-sm"
                       style={{ fontSize: '12px', padding: '4px 10px', display: 'flex', alignItems: 'center', gap: '4px' }}
                       onClick={handleSkipRecheck}
-                      title="Skip re-checking and continue directly to lecture checkpoints"
+                      title="Skip re-checking and continue directly to checkpoints"
                     >
-                      <span>Skip to lecture questions</span>
+                      <span>Skip to checkpoints</span>
                       <ChevronRight size={13} />
                     </button>
                   </div>
@@ -2245,7 +2432,7 @@ export const PlayerPage: React.FC<PlayerPageProps> = ({
                               setAssessmentMode('checkpoints');
                             }}
                           >
-                            <span>Proceed to Lecture Checkpoints</span>
+                            <span>Proceed to Checkpoints</span>
                             <ArrowRight size={13} />
                           </button>
                         )}
@@ -2267,6 +2454,26 @@ export const PlayerPage: React.FC<PlayerPageProps> = ({
                   <h3 style={{ fontSize: '16px', fontWeight: 800, color: 'var(--primary-navy)', margin: 0 }}>
                     Concept Checkpoint
                   </h3>
+                  <button
+                    type="button"
+                    id="btn-header-regenerate-questions"
+                    className="btn btn-secondary btn-sm"
+                    onClick={handleRegenerateQuestions}
+                    disabled={regeneratingQuestions || isProcessing}
+                    title="Regenerate checkpoint questions with Easy -> Moderate -> Hard progression"
+                    style={{
+                      fontSize: '11px',
+                      padding: '2px 8px',
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: '4px',
+                      marginLeft: '4px',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    <RefreshCw size={11} style={{ animation: regeneratingQuestions ? 'spin 2s linear infinite' : 'none' }} />
+                    <span>{regeneratingQuestions ? 'Regenerating…' : 'Regenerate'}</span>
+                  </button>
                 </div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                   <span style={{ fontSize: '11px', fontWeight: 700, color: 'var(--accent-purple)', background: 'var(--accent-soft)', padding: '2px 8px', borderRadius: 'var(--radius-full)' }}>
@@ -2285,6 +2492,40 @@ export const PlayerPage: React.FC<PlayerPageProps> = ({
                       }}
                     >
                       {currentQ.question_type === 'mcq' ? 'MCQ' : 'Short Answer'}
+                    </span>
+                  )}
+                  {/* Difficulty label in easy -> moderate -> hard order */}
+                  {currentQ && (
+                    <span
+                      id="badge-question-difficulty"
+                      style={{
+                        fontSize: '11px',
+                        fontWeight: 800,
+                        textTransform: 'uppercase',
+                        padding: '2px 8px',
+                        borderRadius: 'var(--radius-full)',
+                        background:
+                          (currentQ.difficulty || 'easy').toLowerCase() === 'hard'
+                            ? '#FEE2E2'
+                            : (currentQ.difficulty || 'easy').toLowerCase() === 'moderate'
+                            ? '#FEF3C7'
+                            : '#DCFCE7',
+                        color:
+                          (currentQ.difficulty || 'easy').toLowerCase() === 'hard'
+                            ? '#B91C1C'
+                            : (currentQ.difficulty || 'easy').toLowerCase() === 'moderate'
+                            ? '#B45309'
+                            : '#15803D',
+                        border: `1px solid ${
+                          (currentQ.difficulty || 'easy').toLowerCase() === 'hard'
+                            ? '#FCA5A5'
+                            : (currentQ.difficulty || 'easy').toLowerCase() === 'moderate'
+                            ? '#FDE68A'
+                            : '#86EFAC'
+                        }`,
+                      }}
+                    >
+                      {(currentQ.difficulty || 'easy').toUpperCase()}
                     </span>
                   )}
                   {/* Renamed to "Initial Check" instead of "DIAGNOSTIC ORIGINAL" */}
@@ -2335,6 +2576,32 @@ export const PlayerPage: React.FC<PlayerPageProps> = ({
                   </button>
                 </div>
               </div>
+
+              {/* Progressive Generation Indicator during processing */}
+              {isProcessing && concepts.length > 0 && (
+                <div style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '10px',
+                  background: 'linear-gradient(135deg, rgba(99, 102, 241, 0.08), rgba(168, 85, 247, 0.08))',
+                  border: '1px solid rgba(99, 102, 241, 0.25)',
+                  borderRadius: '8px',
+                  padding: '8px 14px',
+                  marginBottom: '14px',
+                  fontSize: '12px',
+                  color: 'var(--primary-navy)'
+                }}>
+                  <RefreshCw size={14} style={{ animation: 'spin 2s linear infinite', color: 'var(--accent-purple)', flexShrink: 0 }} />
+                  <div>
+                    <span style={{ fontWeight: 700 }}>
+                      Generating questions for concept {Math.min(concepts.length, concepts.filter(c => c.checkpoints && c.checkpoints.length > 0).length + 1)} of {concepts.length}
+                    </span>
+                    <span style={{ color: 'var(--text-muted)', marginLeft: '6px' }}>
+                      ({concepts.filter(c => c.checkpoints && c.checkpoints.length > 0).length} of {concepts.length} ready)
+                    </span>
+                  </div>
+                </div>
+              )}
 
               {/* Question Navigation Pills (Q1..Qn): grey dot = unanswered, green = correct, amber = partial, red = incorrect, purple = current */}
               {allQuestions.length > 1 && (
@@ -2481,6 +2748,48 @@ export const PlayerPage: React.FC<PlayerPageProps> = ({
                         })}
                       </div>
 
+                      {!currentResult?.submitted && (
+                        <div style={{ marginBottom: '16px', padding: '12px', border: '1px solid var(--border-subtle)', borderRadius: 'var(--radius-md)' }}>
+                          <label htmlFor="checkpoint-why-input" style={{ display: 'block', fontSize: '13px', fontWeight: 700, marginBottom: '7px', color: 'var(--primary-navy)' }}>
+                            Why did you choose this? (optional)
+                          </label>
+                          <textarea
+                            id="checkpoint-why-input"
+                            className="form-textarea"
+                            rows={2}
+                            placeholder="Briefly explain your thinking..."
+                            value={whyText}
+                            onChange={(e) => setWhyText(e.target.value)}
+                          />
+                          <div style={{ fontSize: '12px', fontWeight: 700, margin: '12px 0 8px', color: 'var(--primary-navy)' }}>
+                            How confident are you?
+                          </div>
+                          <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                            {([
+                              [1, 'Not sure'],
+                              [2, 'Somewhat sure'],
+                              [3, 'Very sure'],
+                            ] as const).map(([level, label]) => (
+                              <button
+                                key={level}
+                                type="button"
+                                aria-pressed={confidenceLevel === level}
+                                className="btn btn-secondary btn-sm"
+                                onClick={() => setConfidenceLevel(level)}
+                                style={{
+                                  fontSize: '12px',
+                                  border: confidenceLevel === level ? '2px solid var(--accent-purple)' : '1px solid var(--border-subtle)',
+                                  background: confidenceLevel === level ? 'var(--accent-soft)' : 'transparent',
+                                  fontWeight: confidenceLevel === level ? 700 : 500,
+                                }}
+                              >
+                                {label}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+
                       {/* Source from Lecture (Expandable Section for MCQs) */}
                       <div style={{ marginBottom: '16px' }}>
                         <McqSourceSection
@@ -2537,10 +2846,14 @@ export const PlayerPage: React.FC<PlayerPageProps> = ({
                     const textColor = isCorrect ? '#16A34A' : isPartial ? '#D97706' : isUnanswered ? '#475569' : '#E11D48';
                     const badgeBg = isCorrect ? '#DCFCE7' : isPartial ? '#FEF3C7' : isUnanswered ? '#F1F5F9' : '#FFE4E6';
                     const badgeColor = isCorrect ? '#15803D' : isPartial ? '#92400E' : isUnanswered ? '#475569' : '#BE123C';
+                    const pointsEarned = (currentResult.evaluation as any)?.score !== undefined && (currentResult.evaluation as any)?.score !== null
+                      ? (currentResult.evaluation as any).score
+                      : (currentResult.evaluation.points_awarded || 0);
+
                     const badgeText = isCorrect
-                      ? '+10 Points • Verified'
+                      ? `+${pointsEarned || 10} Points • Verified`
                       : isPartial
-                      ? '0 Points • Needs Clarification'
+                      ? `+${pointsEarned > 0 ? pointsEarned : 5} Points • Partial Credit`
                       : isUnanswered
                       ? '0 Points • Unanswered'
                       : '0 Points • Incorrect';
@@ -2613,6 +2926,36 @@ export const PlayerPage: React.FC<PlayerPageProps> = ({
                           </div>
                         </div>
 
+                        {/* Explanation-quality verdict (only when the backend checked it) */}
+                        {(() => {
+                          const explanationResult = currentResult.evaluation as any;
+                          // These are the exact explanation-quality fields returned
+                          // by CheckpointEvaluation in types/index.ts.
+                          const explanationVerdict = explanationResult?.explanation_verdict;
+                          const explanationReason = explanationResult?.verdict_reason;
+                          const verdictLabels: Record<string, string> = {
+                            valid: 'Valid reasoning',
+                            valid_reasoning: 'Valid reasoning',
+                            'valid reasoning': 'Valid reasoning',
+                            too_brief: 'Too brief',
+                            'too brief': 'Too brief',
+                            brief: 'Too brief',
+                            flawed: 'Flawed reasoning',
+                            flawed_reasoning: 'Flawed reasoning',
+                            'flawed reasoning': 'Flawed reasoning',
+                          };
+                          const verdictLabel = explanationVerdict
+                            ? verdictLabels[String(explanationVerdict).toLowerCase()]
+                            : undefined;
+                          if (!verdictLabel || String(explanationVerdict).toLowerCase() === 'not_checked') return null;
+                          return (
+                            <div style={{ fontSize: '12px', lineHeight: 1.45, marginBottom: '12px', padding: '9px 11px', borderRadius: '6px', background: '#F8FAFC', border: '1px solid #E2E8F0', color: '#334155' }}>
+                              <strong>{verdictLabel}</strong>
+                              {explanationReason ? <span> — {explanationReason}</span> : null}
+                            </div>
+                          );
+                        })()}
+
                         {/* One-line feedback / Explanation */}
                         {feedbackText && (
                           <div style={{ fontSize: '12px', color: isCorrect ? '#166534' : isPartial ? '#78350F' : isUnanswered ? '#334155' : '#881337', lineHeight: 1.45, marginBottom: '12px' }}>
@@ -2669,6 +3012,53 @@ export const PlayerPage: React.FC<PlayerPageProps> = ({
                             <div style={{ marginTop: '8px', lineHeight: 1.5, color: '#334155', fontSize: '12px' }}>
                               {currentResult.evaluation.correct_mental_model || currentQ.explanation}
                             </div>
+                          </details>
+                        )}
+
+                        {/* Evaluation Rubric Breakdown (Feature 1) */}
+                        {((currentResult.evaluation as any)?.rubric_breakdown && (currentResult.evaluation as any).rubric_breakdown.length > 0) && (
+                          <details
+                            open
+                            style={{
+                              background: '#FFFFFF',
+                              borderRadius: '6px',
+                              border: '1px solid #CBD5E1',
+                              padding: '8px 12px',
+                              fontSize: '12px',
+                              color: '#1E293B',
+                              cursor: 'pointer',
+                            }}
+                          >
+                            <summary style={{ fontWeight: 700, color: '#0F172A', outline: 'none', marginBottom: '6px' }}>
+                              Rubric Assessment Breakdown
+                            </summary>
+                            <div style={{ marginTop: '6px', display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                              {(currentResult.evaluation as any).rubric_breakdown.map((r: any, rIdx: number) => (
+                                <div key={rIdx} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: '#F8FAFC', padding: '6px 10px', borderRadius: '4px', fontSize: '11px' }}>
+                                  <div>
+                                    <span style={{ fontWeight: 600 }}>{r.criterion}</span>
+                                    {r.notes && <div style={{ color: '#64748B', fontSize: '10px' }}>{r.notes}</div>}
+                                  </div>
+                                  <span style={{
+                                    fontWeight: 700,
+                                    padding: '2px 6px',
+                                    borderRadius: '4px',
+                                    background: r.status === 'correct' ? '#DCFCE7' : r.status === 'partial' ? '#FEF3C7' : '#FEE2E2',
+                                    color: r.status === 'correct' ? '#166534' : r.status === 'partial' ? '#92400E' : '#991B1B'
+                                  }}>
+                                    {r.points_awarded} / {r.max_points} pts ({r.status})
+                                  </span>
+                                </div>
+                              ))}
+                            </div>
+                            {((currentResult.evaluation as any)?.what_understood || (currentResult.evaluation as any)?.how_to_improve) && (
+                              <div style={{ marginTop: '8px', borderTop: '1px solid #E2E8F0', paddingTop: '6px', fontSize: '11px', color: '#475569', display: 'flex', flexDirection: 'column', gap: '3px' }}>
+                                {(currentResult.evaluation as any)?.what_understood && <div><strong style={{ color: '#166534' }}>Understood: </strong>{(currentResult.evaluation as any).what_understood}</div>}
+                                {(currentResult.evaluation as any)?.what_missing && <div><strong style={{ color: '#D97706' }}>Missing: </strong>{(currentResult.evaluation as any).what_missing}</div>}
+                                {(currentResult.evaluation as any)?.what_needs_correction && <div><strong style={{ color: '#DC2626' }}>Needs Correction: </strong>{(currentResult.evaluation as any).what_needs_correction}</div>}
+                                {(currentResult.evaluation as any)?.how_to_improve && <div><strong style={{ color: '#2563EB' }}>To Improve: </strong>{(currentResult.evaluation as any).how_to_improve}</div>}
+                              </div>
+                            )}
                           </details>
                         )}
 
@@ -2770,11 +3160,14 @@ export const PlayerPage: React.FC<PlayerPageProps> = ({
                 </div>
               ) : (
                 <div style={{ textAlign: 'center', padding: '24px 16px' }}>
-                  {(lecture?.processing_status || lecture?.status) === 'generating' ? (
+                  {isProcessing ? (
                     <div>
-                      <RefreshCw size={18} style={{ animation: 'spin 2s linear infinite', marginBottom: '8px', color: '#2563EB' }} />
-                      <div style={{ fontSize: '13px', color: '#1E40AF', fontWeight: 600 }}>
-                        Generating checkpoint questions... ({lecture?.progress || 0}%)
+                      <RefreshCw size={22} style={{ animation: 'spin 2s linear infinite', marginBottom: '8px', color: 'var(--accent-purple)' }} />
+                      <div style={{ fontSize: '14px', fontWeight: 700, color: 'var(--primary-navy)', marginBottom: '4px' }}>
+                        Generating questions for concept {concepts.length > 0 ? `1 of ${concepts.length}` : '...'}...
+                      </div>
+                      <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
+                        Status: {lecture?.processing_status || 'processing'} ({lecture?.progress || 0}%)
                       </div>
                     </div>
                   ) : concepts.length > 0 ? (
@@ -2796,7 +3189,7 @@ export const PlayerPage: React.FC<PlayerPageProps> = ({
                         id="btn-regenerate-questions"
                         className="btn btn-primary btn-sm"
                         onClick={handleRegenerateQuestions}
-                        disabled={regeneratingQuestions}
+                        disabled={regeneratingQuestions || isProcessing}
                         style={{ fontSize: '13px', display: 'inline-flex', alignItems: 'center', gap: '6px' }}
                       >
                         {regeneratingQuestions
@@ -2811,7 +3204,7 @@ export const PlayerPage: React.FC<PlayerPageProps> = ({
                 </div>
               )}
             </div>
-          )}
+         ))}
         </div>
       </div>
 

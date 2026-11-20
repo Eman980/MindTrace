@@ -458,9 +458,68 @@ export const LecturesPage: React.FC<LecturesPageProps> = ({ setActiveTab, onSele
               <h3 style={{ fontSize: '18px', fontWeight: 800, color: 'var(--navy-800)', marginBottom: '8px', lineHeight: 1.3 }}>
                 {lec.title}
               </h3>
-              <p style={{ fontSize: '13px', color: 'var(--text-muted)', flex: 1, marginBottom: '16px', lineHeight: 1.5 }}>
+              <p style={{ fontSize: '13px', color: 'var(--text-muted)', flex: 1, marginBottom: '12px', lineHeight: 1.5 }}>
                 {lec.description || 'Course lecture recording with automatic concept segmentation.'}
               </p>
+
+              {/* Prerequisite / Dependency Indicator */}
+              {(() => {
+                const isAnalyzing = lec.status === 'processing' ||
+                  lec.processing_status === 'analyzing_dependencies';
+                if (isAnalyzing) {
+                  return (
+                    <div
+                      style={{
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: '6px',
+                        fontSize: '12px',
+                        color: 'var(--primary-accent)',
+                        background: 'var(--accent-soft)',
+                        border: '1px solid var(--border-subtle)',
+                        borderRadius: 'var(--radius-sm)',
+                        padding: '4px 10px',
+                        marginBottom: '14px',
+                        fontWeight: 600,
+                        width: 'fit-content',
+                      }}
+                      title="MindTrace is currently analyzing lecture dependencies"
+                    >
+                      <RefreshCw size={12} className="spin-animation" />
+                      <span>Detecting prerequisites...</span>
+                    </div>
+                  );
+                }
+                const prereqTitle = lec.prerequisite_lecture_title || (lec.prerequisite_lecture_id ? lectures.find(l => l.id === lec.prerequisite_lecture_id)?.title : null);
+                return prereqTitle ? (
+                  <div
+                    style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: '6px',
+                      fontSize: '12px',
+                      color: '#4338CA',
+                      background: '#EEF2FF',
+                      border: '1px solid #C7D2FE',
+                      borderRadius: 'var(--radius-sm)',
+                      padding: '4px 10px',
+                      marginBottom: '14px',
+                      fontWeight: 600,
+                      width: 'fit-content',
+                      maxWidth: '100%',
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                      whiteSpace: 'nowrap'
+                    }}
+                    title={`This lecture builds on "${prereqTitle}"`}
+                  >
+                    <BookOpen size={13} color="#4F46E5" style={{ flexShrink: 0 }} />
+                    <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                      Prerequisite: <strong>{prereqTitle}</strong>
+                    </span>
+                  </div>
+                ) : null;
+              })()}
 
               {/* Metric badges */}
               <div

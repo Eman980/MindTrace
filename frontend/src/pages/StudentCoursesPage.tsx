@@ -157,169 +157,313 @@ export const StudentCoursesPage: React.FC = () => {
   };
 
   return (
-    <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+    <div>
       {/* Top Header */}
-      <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4 pb-6 border-b border-slate-200 dark:border-slate-800">
+      <div className="section-header" style={{ marginBottom: '24px' }}>
         <div>
-          <div className="flex items-center gap-2.5">
-            <div className="p-2 rounded-xl bg-indigo-50 dark:bg-indigo-950/40 text-indigo-600 dark:text-indigo-400">
-              <GraduationCap className="w-6 h-6" />
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+            <div
+              style={{
+                width: '36px',
+                height: '36px',
+                borderRadius: 'var(--radius-md)',
+                background: 'var(--accent-soft)',
+                color: 'var(--accent-purple)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+              }}
+            >
+              <GraduationCap size={20} />
             </div>
-            <h1 className="text-2xl font-bold text-slate-900 dark:text-white">
-              My Courses
-            </h1>
+            <h1 className="section-title">My Courses</h1>
           </div>
-          <p className="mt-1.5 text-sm text-slate-600 dark:text-slate-400">
+          <p className="section-subtitle">
             Connect with your instructors using course join codes to share subject-specific learning insights.
           </p>
         </div>
 
-        <button
-          onClick={openJoinModal}
-          className="inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white font-medium text-sm transition-colors shadow-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 dark:focus:ring-offset-slate-900"
-        >
-          <Plus className="w-4 h-4" />
-          Join Course
-        </button>
+        <div style={{ display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap' }}>
+          <button
+            onClick={openJoinModal}
+            className="btn btn-primary btn-sm"
+          >
+            <Plus size={14} />
+            <span>Join Course</span>
+          </button>
+        </div>
       </div>
 
       {/* Notification Banner */}
       {notification && (
-        <div className="mt-6 p-4 rounded-xl bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800/50 flex items-center justify-between text-emerald-800 dark:text-emerald-300 text-sm">
-          <div className="flex items-center gap-3">
-            <CheckCircle2 className="w-5 h-5 text-emerald-600 dark:text-emerald-400 shrink-0" />
+        <div
+          style={{
+            padding: '12px 18px',
+            marginBottom: '20px',
+            borderRadius: 'var(--radius-md)',
+            background: '#DCFCE7',
+            color: '#16A34A',
+            border: '1px solid #BBF7D0',
+            fontSize: '13px',
+            fontWeight: 600,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: '8px',
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+            <CheckCircle2 size={16} />
             <span>{notification}</span>
           </div>
           <button
             onClick={() => setNotification(null)}
-            className="p-1 text-emerald-600 hover:text-emerald-800 dark:text-emerald-400 dark:hover:text-emerald-200"
+            style={{
+              background: 'transparent',
+              border: 'none',
+              cursor: 'pointer',
+              color: '#16A34A',
+              display: 'flex',
+              alignItems: 'center',
+            }}
           >
-            <X className="w-4 h-4" />
+            <X size={16} />
           </button>
         </div>
       )}
 
       {/* Error Banner */}
       {error && (
-        <div className="mt-6 p-4 rounded-xl bg-rose-50 dark:bg-rose-950/30 border border-rose-200 dark:border-rose-800/50 flex items-center justify-between text-rose-800 dark:text-rose-300 text-sm">
-          <div className="flex items-center gap-3">
-            <AlertCircle className="w-5 h-5 text-rose-600 dark:text-rose-400 shrink-0" />
+        <div
+          className="alert-banner alert-warning"
+          style={{
+            marginBottom: '20px',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <AlertCircle size={16} />
             <span>{error}</span>
           </div>
           <button
             onClick={fetchEnrollments}
-            className="inline-flex items-center gap-1.5 px-3 py-1 bg-white dark:bg-rose-900/50 rounded-md border border-rose-200 dark:border-rose-700 hover:bg-rose-50 text-xs font-medium"
+            className="btn btn-secondary btn-sm"
+            style={{ padding: '4px 10px', fontSize: '12px' }}
           >
-            <RefreshCw className="w-3.5 h-3.5" /> Retry
+            <RefreshCw size={12} /> Retry
           </button>
         </div>
       )}
 
       {/* Main Content */}
-      <div className="mt-8">
+      <div style={{ marginTop: '24px' }}>
         {loading ? (
-          <div className="flex flex-col items-center justify-center py-16 text-slate-500 dark:text-slate-400">
-            <RefreshCw className="w-8 h-8 animate-spin text-indigo-500 mb-3" />
-            <p className="text-sm">Loading your enrolled courses...</p>
+          <div style={{ padding: '60px 0', textAlign: 'center' }}>
+            <RefreshCw size={32} className="spin-animation" style={{ color: 'var(--accent-purple)' }} />
+            <div style={{ marginTop: '16px', fontSize: '15px', color: 'var(--text-muted)' }}>
+              Loading your enrolled courses...
+            </div>
           </div>
         ) : enrollments.length === 0 ? (
           /* Empty State */
-          <div className="rounded-2xl border-2 border-dashed border-slate-200 dark:border-slate-800 p-12 text-center bg-slate-50/50 dark:bg-slate-900/20">
-            <div className="w-16 h-16 mx-auto mb-4 rounded-2xl bg-indigo-50 dark:bg-indigo-950/40 text-indigo-600 dark:text-indigo-400 flex items-center justify-center">
-              <BookOpen className="w-8 h-8" />
+          <div className="card" style={{ textAlign: 'center', padding: '48px 24px' }}>
+            <div
+              style={{
+                width: '64px',
+                height: '64px',
+                margin: '0 auto 16px',
+                borderRadius: 'var(--radius-lg)',
+                background: 'var(--accent-soft)',
+                color: 'var(--accent-purple)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+              }}
+            >
+              <BookOpen size={32} />
             </div>
-            <h3 className="text-lg font-semibold text-slate-900 dark:text-white">
+            <h3 style={{ fontSize: '18px', fontWeight: 700, color: 'var(--primary-navy)' }}>
               No courses joined yet
             </h3>
-            <p className="mt-2 text-sm text-slate-500 dark:text-slate-400 max-w-md mx-auto">
-              If your teacher gave you a joining code (e.g. <code className="px-1.5 py-0.5 rounded bg-slate-100 dark:bg-slate-800 font-mono text-xs">MIND-XXXXXX</code>), join their course to share learning insights while keeping unrelated study private.
+            <p style={{ fontSize: '14px', color: 'var(--text-muted)', maxWidth: '460px', margin: '8px auto 20px', lineHeight: 1.5 }}>
+              If your teacher gave you a joining code (e.g.{' '}
+              <code style={{ padding: '2px 6px', borderRadius: 'var(--radius-sm)', background: 'var(--bg-subtle)', fontFamily: 'JetBrains Mono, monospace', fontSize: '12px' }}>
+                MIND-XXXXXX
+              </code>
+              ), join their course to share learning insights while keeping unrelated study private.
             </p>
-            <button
-              onClick={openJoinModal}
-              className="mt-6 inline-flex items-center gap-2 px-5 py-2.5 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white font-medium text-sm transition-colors shadow-sm"
-            >
-              <Plus className="w-4 h-4" />
-              Join Your First Course
-            </button>
+            <div style={{ display: 'flex', gap: '12px', justifyContent: 'center' }}>
+              <button
+                onClick={openJoinModal}
+                className="btn btn-primary btn-sm"
+              >
+                <Plus size={14} />
+                <span>Join Your First Course</span>
+              </button>
+            </div>
           </div>
         ) : (
           /* Courses Grid */
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: '20px' }}>
             {enrollments.map((enr) => {
               const isActive = enr.status === 'active' && enr.consent_granted;
               return (
                 <div
                   key={enr.id}
-                  className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-sm hover:shadow-md transition-shadow flex flex-col justify-between overflow-hidden"
+                  className="card card-hover"
+                  style={{ display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}
                 >
-                  <div className="p-6">
+                  <div>
                     {/* Header: Title + Status */}
-                    <div className="flex items-start justify-between gap-3">
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '12px', marginBottom: '12px' }}>
                       <div>
-                        <h3 className="text-lg font-bold text-slate-900 dark:text-white leading-snug">
+                        <h3 style={{ fontSize: '18px', fontWeight: 800, color: 'var(--primary-navy)', lineHeight: 1.3 }}>
                           {enr.title}
                         </h3>
                         {enr.course_code ? (
-                          <span className="mt-1.5 inline-block px-2.5 py-0.5 text-xs font-semibold rounded-md bg-indigo-50 dark:bg-indigo-950/50 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800/60 font-mono">
+                          <span
+                            style={{
+                              display: 'inline-block',
+                              marginTop: '6px',
+                              padding: '2px 8px',
+                              fontSize: '11px',
+                              fontWeight: 700,
+                              borderRadius: 'var(--radius-full)',
+                              background: 'var(--accent-soft)',
+                              color: 'var(--accent-purple)',
+                              fontFamily: 'JetBrains Mono, monospace',
+                            }}
+                          >
                             {enr.course_code}
                           </span>
                         ) : (
-                          <span className="mt-1.5 inline-block px-2.5 py-0.5 text-xs font-medium rounded-md bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400">
+                          <span
+                            style={{
+                              display: 'inline-block',
+                              marginTop: '6px',
+                              padding: '2px 8px',
+                              fontSize: '11px',
+                              fontWeight: 600,
+                              borderRadius: 'var(--radius-full)',
+                              background: 'var(--bg-subtle)',
+                              color: 'var(--text-muted)',
+                            }}
+                          >
                             Independent
                           </span>
                         )}
                       </div>
 
                       {isActive ? (
-                        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-emerald-50 dark:bg-emerald-950/50 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800/60 shrink-0">
-                          <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                        <span
+                          style={{
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: '6px',
+                            padding: '4px 10px',
+                            borderRadius: 'var(--radius-full)',
+                            fontSize: '11px',
+                            fontWeight: 700,
+                            background: '#DCFCE7',
+                            color: '#16A34A',
+                            border: '1px solid #BBF7D0',
+                            flexShrink: 0,
+                          }}
+                        >
+                          <span
+                            style={{
+                              width: '6px',
+                              height: '6px',
+                              borderRadius: '50%',
+                              background: '#16A34A',
+                            }}
+                          />
                           Active
                         </span>
                       ) : (
-                        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 shrink-0">
+                        <span
+                          style={{
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: '6px',
+                            padding: '4px 10px',
+                            borderRadius: 'var(--radius-full)',
+                            fontSize: '11px',
+                            fontWeight: 600,
+                            background: 'var(--bg-subtle)',
+                            color: 'var(--text-muted)',
+                            border: '1px solid var(--border-subtle)',
+                            flexShrink: 0,
+                          }}
+                        >
                           Disconnected
                         </span>
                       )}
                     </div>
 
                     {/* Instructor Info */}
-                    <div className="mt-4 flex items-center gap-2 text-xs text-slate-600 dark:text-slate-400">
-                      <UserCheck className="w-4 h-4 text-indigo-500" />
-                      <span>Instructor: <strong className="text-slate-800 dark:text-slate-200">{enr.teacher_name}</strong></span>
+                    <div style={{ marginTop: '14px', display: 'flex', alignItems: 'center', gap: '8px', fontSize: '13px', color: 'var(--text-muted)' }}>
+                      <UserCheck size={16} color="var(--accent-purple)" />
+                      <span>
+                        Instructor: <strong style={{ color: 'var(--primary-navy)' }}>{enr.teacher_name}</strong>
+                      </span>
                     </div>
 
                     {/* Course Description */}
                     {enr.description && (
-                      <p className="mt-3 text-xs text-slate-500 dark:text-slate-400 line-clamp-2">
+                      <p style={{ marginTop: '10px', fontSize: '13px', color: 'var(--text-muted)', lineHeight: 1.5 }}>
                         {enr.description}
                       </p>
                     )}
 
-                    {/* Privacy & Association Metrics */}
-                    <div className="mt-5 p-3 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-100 dark:border-slate-800 space-y-2">
-                      <div className="flex items-center justify-between text-xs">
-                        <span className="text-slate-500 dark:text-slate-400 flex items-center gap-1.5">
-                          <Layers className="w-3.5 h-3.5 text-slate-400" />
+                    {/* Privacy & Association Metrics Box */}
+                    <div
+                      style={{
+                        marginTop: '18px',
+                        padding: '14px',
+                        borderRadius: 'var(--radius-md)',
+                        background: 'var(--bg-subtle)',
+                        border: '1px solid var(--border-subtle)',
+                        display: 'flex',
+                        flexDirection: 'column',
+                        gap: '8px',
+                      }}
+                    >
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '12px' }}>
+                        <span style={{ color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                          <Layers size={14} color="var(--text-light)" />
                           Associated Lectures
                         </span>
-                        <span className="font-semibold text-slate-800 dark:text-slate-200">
+                        <span style={{ fontWeight: 700, color: 'var(--primary-navy)' }}>
                           {enr.associated_lectures_count}
                         </span>
                       </div>
 
-                      <div className="flex items-center justify-between text-xs">
-                        <span className="text-slate-500 dark:text-slate-400 flex items-center gap-1.5">
-                          <ShieldCheck className="w-3.5 h-3.5 text-emerald-500" />
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '12px' }}>
+                        <span style={{ color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                          <ShieldCheck size={14} color="#16A34A" />
                           Insights Sharing
                         </span>
-                        <span className={`font-medium ${isActive ? 'text-emerald-600 dark:text-emerald-400' : 'text-slate-400'}`}>
+                        <span style={{ fontWeight: 600, color: isActive ? '#16A34A' : 'var(--text-muted)' }}>
                           {isActive ? 'Aggregated Only' : 'Disabled'}
                         </span>
                       </div>
 
                       {enr.consent_at && (
-                        <div className="pt-1 border-t border-slate-200/50 dark:border-slate-700/50 text-[11px] text-slate-400 flex items-center gap-1">
-                          <Calendar className="w-3 h-3" />
+                        <div
+                          style={{
+                            paddingTop: '6px',
+                            borderTop: '1px solid var(--border-subtle)',
+                            fontSize: '11px',
+                            color: 'var(--text-light)',
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '4px',
+                          }}
+                        >
+                          <Calendar size={12} />
                           <span>Connected {new Date(enr.consent_at).toLocaleDateString()}</span>
                         </div>
                       )}
@@ -327,26 +471,44 @@ export const StudentCoursesPage: React.FC = () => {
                   </div>
 
                   {/* Card Actions */}
-                  <div className="p-4 bg-slate-50 dark:bg-slate-900/80 border-t border-slate-100 dark:border-slate-800 flex items-center justify-between gap-2">
+                  <div
+                    style={{
+                      marginTop: '20px',
+                      paddingTop: '14px',
+                      borderTop: '1px solid var(--border-subtle)',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                      gap: '8px',
+                    }}
+                  >
                     {isActive ? (
                       <>
                         <button
                           onClick={() => openAssociatedLectures(enr)}
-                          className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-indigo-600 dark:text-indigo-400 hover:text-indigo-700 dark:hover:text-indigo-300 hover:bg-indigo-50 dark:hover:bg-indigo-950/40 rounded-lg transition-colors"
+                          className="btn btn-secondary btn-sm"
+                          style={{ fontSize: '12px', padding: '6px 12px' }}
                         >
-                          <FileText className="w-3.5 h-3.5" />
-                          View Shared ({enr.associated_lectures_count})
+                          <FileText size={14} />
+                          <span>View Shared ({enr.associated_lectures_count})</span>
                         </button>
                         <button
                           onClick={() => {
                             setDisconnectError(null);
                             setDisconnectingCourse(enr);
                           }}
-                          className="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium text-rose-600 dark:text-rose-400 hover:text-rose-700 hover:bg-rose-50 dark:hover:bg-rose-950/40 rounded-lg transition-colors"
+                          className="btn btn-sm"
+                          style={{
+                            fontSize: '12px',
+                            padding: '6px 10px',
+                            background: '#FEE2E2',
+                            color: '#DC2626',
+                            borderColor: '#FECACA',
+                          }}
                           title="Disconnect from course and revoke consent"
                         >
-                          <LogOut className="w-3.5 h-3.5" />
-                          Disconnect
+                          <LogOut size={14} />
+                          <span>Disconnect</span>
                         </button>
                       </>
                     ) : (
@@ -359,9 +521,10 @@ export const StudentCoursesPage: React.FC = () => {
                           setJoinStep('input');
                           setIsJoinOpen(true);
                         }}
-                        className="w-full py-1.5 text-xs font-medium text-indigo-600 dark:text-indigo-400 hover:text-indigo-700 dark:hover:text-indigo-300 text-center"
+                        className="btn btn-primary btn-sm"
+                        style={{ width: '100%' }}
                       >
-                        Re-join Course
+                        <span>Re-join Course</span>
                       </button>
                     )}
                   </div>
@@ -374,19 +537,47 @@ export const StudentCoursesPage: React.FC = () => {
 
       {/* Join Course Modal */}
       {isJoinOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-fade-in">
-          <div className="w-full max-w-lg bg-white dark:bg-slate-900 rounded-2xl shadow-2xl border border-slate-200 dark:border-slate-800 overflow-hidden flex flex-col">
+        <div
+          style={{
+            position: 'fixed',
+            inset: 0,
+            background: 'rgba(11, 19, 43, 0.65)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 1000,
+            padding: '20px',
+            backdropFilter: 'blur(3px)',
+          }}
+          onClick={() => !verifying && !joining && setIsJoinOpen(false)}
+        >
+          <div
+            className="card"
+            style={{ maxWidth: '520px', width: '100%', padding: '24px' }}
+            onClick={(e) => e.stopPropagation()}
+          >
             {/* Modal Header */}
-            <div className="p-6 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between">
-              <div className="flex items-center gap-2.5">
-                <div className="p-2 rounded-xl bg-indigo-50 dark:bg-indigo-950/40 text-indigo-600 dark:text-indigo-400">
-                  <KeyRound className="w-5 h-5" />
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                <div
+                  style={{
+                    width: '36px',
+                    height: '36px',
+                    borderRadius: 'var(--radius-md)',
+                    background: 'var(--accent-soft)',
+                    color: 'var(--accent-purple)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                  }}
+                >
+                  <KeyRound size={18} />
                 </div>
                 <div>
-                  <h3 className="text-lg font-bold text-slate-900 dark:text-white">
+                  <h3 style={{ fontSize: '18px', fontWeight: 800, color: 'var(--primary-navy)' }}>
                     {joinStep === 'input' ? 'Join a Course' : 'Confirm Course & Consent'}
                   </h3>
-                  <p className="text-xs text-slate-500 dark:text-slate-400">
+                  <p style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
                     {joinStep === 'input'
                       ? 'Enter the 6-character code given by your instructor'
                       : 'Review course details and privacy terms before joining'}
@@ -395,20 +586,20 @@ export const StudentCoursesPage: React.FC = () => {
               </div>
               <button
                 onClick={() => setIsJoinOpen(false)}
-                className="p-1.5 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800"
+                style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--text-muted)' }}
               >
-                <X className="w-5 h-5" />
+                <X size={18} />
               </button>
             </div>
 
             {/* Modal Body */}
-            <div className="p-6 space-y-5">
+            <div>
               {joinStep === 'input' ? (
                 /* Step 1: Input Code */
-                <form onSubmit={handleVerifyCode} className="space-y-4">
-                  <div>
-                    <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">
-                      Course Joining Code <span className="text-rose-500">*</span>
+                <form onSubmit={handleVerifyCode}>
+                  <div style={{ marginBottom: '16px' }}>
+                    <label style={{ display: 'block', fontSize: '13px', fontWeight: 700, color: 'var(--text-main)', marginBottom: '6px' }}>
+                      Course Joining Code <span style={{ color: '#DC2626' }}>*</span>
                     </label>
                     <input
                       type="text"
@@ -418,42 +609,55 @@ export const StudentCoursesPage: React.FC = () => {
                         setVerifyError(null);
                       }}
                       placeholder="e.g. MIND-P8Q3PU"
-                      className="w-full px-4 py-3 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white font-mono uppercase tracking-wider text-center text-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+                      style={{
+                        width: '100%',
+                        padding: '12px 14px',
+                        borderRadius: 'var(--radius-md)',
+                        border: '1px solid var(--border-strong)',
+                        fontSize: '18px',
+                        fontFamily: 'JetBrains Mono, monospace',
+                        textTransform: 'uppercase',
+                        letterSpacing: '2px',
+                        textAlign: 'center',
+                        outline: 'none',
+                        boxSizing: 'border-box',
+                      }}
                       autoFocus
                       required
                     />
-                    <p className="mt-1.5 text-xs text-slate-500 dark:text-slate-400 text-center">
+                    <p style={{ marginTop: '6px', fontSize: '12px', color: 'var(--text-muted)', textAlign: 'center' }}>
                       Case-insensitive. Dashes are optional.
                     </p>
                   </div>
 
                   {verifyError && (
-                    <div className="p-3 rounded-xl bg-rose-50 dark:bg-rose-950/30 border border-rose-200 dark:border-rose-800/50 flex items-center gap-2.5 text-rose-700 dark:text-rose-300 text-xs">
-                      <AlertCircle className="w-4 h-4 shrink-0 text-rose-600 dark:text-rose-400" />
+                    <div style={{ padding: '10px 14px', background: '#FEE2E2', color: '#DC2626', borderRadius: 'var(--radius-sm)', fontSize: '13px', marginBottom: '16px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      <AlertCircle size={16} style={{ flexShrink: 0 }} />
                       <span>{verifyError}</span>
                     </div>
                   )}
 
-                  <div className="pt-2 flex justify-end gap-3">
+                  <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', marginTop: '20px' }}>
                     <button
                       type="button"
                       onClick={() => setIsJoinOpen(false)}
-                      className="px-4 py-2 text-sm font-medium text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg"
+                      className="btn btn-secondary btn-sm"
                     >
                       Cancel
                     </button>
                     <button
                       type="submit"
                       disabled={verifying || !inputCode.trim()}
-                      className="inline-flex items-center gap-2 px-5 py-2 text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed rounded-lg shadow-sm"
+                      className="btn btn-primary btn-sm"
                     >
                       {verifying ? (
                         <>
-                          <RefreshCw className="w-4 h-4 animate-spin" /> Verifying...
+                          <RefreshCw size={14} className="spin-animation" /> Verifying...
                         </>
                       ) : (
                         <>
-                          Verify Code <ArrowRight className="w-4 h-4" />
+                          <span>Verify Code</span>
+                          <ArrowRight size={14} />
                         </>
                       )}
                     </button>
@@ -461,58 +665,81 @@ export const StudentCoursesPage: React.FC = () => {
                 </form>
               ) : (
                 /* Step 2: Preview & Explicit Consent */
-                <div className="space-y-4">
+                <div>
                   {/* Course Details Card */}
-                  <div className="p-4 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700/80 space-y-2">
-                    <div className="flex items-center justify-between">
-                      <span className="text-xs font-semibold text-indigo-600 dark:text-indigo-400 uppercase tracking-wider">
+                  <div
+                    style={{
+                      padding: '14px',
+                      borderRadius: 'var(--radius-md)',
+                      background: 'var(--bg-subtle)',
+                      border: '1px solid var(--border-subtle)',
+                      marginBottom: '14px',
+                    }}
+                  >
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
+                      <span style={{ fontSize: '11px', fontWeight: 700, color: 'var(--accent-purple)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
                         Course Found
                       </span>
                       {preview?.course_code && (
-                        <span className="px-2 py-0.5 rounded bg-indigo-100 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-300 font-mono text-xs font-semibold">
+                        <span
+                          style={{
+                            padding: '2px 8px',
+                            borderRadius: 'var(--radius-full)',
+                            background: 'var(--accent-soft)',
+                            color: 'var(--accent-purple)',
+                            fontFamily: 'JetBrains Mono, monospace',
+                            fontSize: '11px',
+                            fontWeight: 700,
+                          }}
+                        >
                           {preview.course_code}
                         </span>
                       )}
                     </div>
-                    <h4 className="text-lg font-bold text-slate-900 dark:text-white">
+                    <h4 style={{ fontSize: '16px', fontWeight: 800, color: 'var(--primary-navy)' }}>
                       {preview?.title}
                     </h4>
-                    <p className="text-xs text-slate-600 dark:text-slate-400 flex items-center gap-1.5">
-                      <UserCheck className="w-4 h-4 text-slate-400" />
-                      Instructor: <strong className="text-slate-800 dark:text-slate-200">{preview?.teacher_name}</strong>
+                    <p style={{ fontSize: '13px', color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: '6px', marginTop: '4px' }}>
+                      <UserCheck size={14} color="var(--text-light)" />
+                      Instructor: <strong style={{ color: 'var(--primary-navy)' }}>{preview?.teacher_name}</strong>
                     </p>
                     {preview?.description && (
-                      <p className="text-xs text-slate-500 dark:text-slate-400 pt-1">
+                      <p style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '6px', lineHeight: 1.4 }}>
                         {preview.description}
                       </p>
                     )}
                   </div>
 
                   {preview?.already_enrolled && (
-                    <div className="p-3 rounded-xl bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800/50 flex items-center gap-2 text-amber-800 dark:text-amber-300 text-xs">
-                      <AlertCircle className="w-4 h-4 shrink-0 text-amber-600" />
+                    <div style={{ padding: '10px 14px', background: '#FEF3C7', color: '#D97706', borderRadius: 'var(--radius-sm)', fontSize: '12px', marginBottom: '14px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      <AlertCircle size={16} style={{ flexShrink: 0 }} />
                       <span>You are already actively enrolled in this course.</span>
                     </div>
                   )}
 
                   {/* One-Time Privacy & Consent Disclosure */}
-                  <div className="p-4 rounded-xl bg-indigo-50/60 dark:bg-indigo-950/20 border border-indigo-100 dark:border-indigo-900/50 space-y-2.5">
-                    <div className="flex items-center gap-2 text-indigo-900 dark:text-indigo-200 font-semibold text-xs">
-                      <ShieldCheck className="w-4 h-4 text-indigo-600 dark:text-indigo-400 shrink-0" />
+                  <div
+                    style={{
+                      padding: '14px',
+                      borderRadius: 'var(--radius-md)',
+                      background: 'var(--accent-soft)',
+                      border: '1px solid #C7D2FE',
+                      marginBottom: '14px',
+                    }}
+                  >
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: 'var(--accent-purple)', fontWeight: 700, fontSize: '12px', marginBottom: '8px' }}>
+                      <ShieldCheck size={16} />
                       <span>Privacy & Data Sharing Disclosure</span>
                     </div>
-                    <ul className="text-xs text-slate-600 dark:text-slate-300 space-y-1.5 list-disc pl-5">
-                      <li>
+                    <ul style={{ fontSize: '12px', color: 'var(--text-main)', paddingLeft: '20px', lineHeight: 1.5, margin: 0 }}>
+                      <li style={{ marginBottom: '4px' }}>
                         <strong>Explicit association only:</strong> Only lectures you explicitly assign to{' '}
-                        <strong className="text-indigo-700 dark:text-indigo-300">
-                          {preview?.title}
-                        </strong>{' '}
-                        during upload will share insights with this instructor.
+                        <strong style={{ color: 'var(--accent-purple)' }}>{preview?.title}</strong> during upload will share insights with this instructor.
                       </li>
-                      <li>
+                      <li style={{ marginBottom: '4px' }}>
                         <strong>Aggregated insights:</strong> Your teacher sees class-level concept confusion and struggling patterns, not your private notes.
                       </li>
-                      <li>
+                      <li style={{ marginBottom: '4px' }}>
                         <strong>Strict subject isolation:</strong> Your other lectures and independent study remain 100% private.
                       </li>
                       <li>
@@ -522,7 +749,19 @@ export const StudentCoursesPage: React.FC = () => {
                   </div>
 
                   {/* Explicit Consent Checkbox */}
-                  <label className="flex items-start gap-3 p-3 rounded-xl border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800/40 cursor-pointer transition-colors">
+                  <label
+                    style={{
+                      display: 'flex',
+                      alignItems: 'flex-start',
+                      gap: '10px',
+                      padding: '12px',
+                      borderRadius: 'var(--radius-md)',
+                      border: '1px solid var(--border-subtle)',
+                      background: 'var(--bg-surface)',
+                      cursor: 'pointer',
+                      marginBottom: '14px',
+                    }}
+                  >
                     <input
                       type="checkbox"
                       checked={consentChecked}
@@ -530,26 +769,26 @@ export const StudentCoursesPage: React.FC = () => {
                         setConsentChecked(e.target.checked);
                         setJoinError(null);
                       }}
-                      className="mt-0.5 w-4 h-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
+                      style={{ marginTop: '2px', cursor: 'pointer' }}
                     />
-                    <span className="text-xs text-slate-700 dark:text-slate-300 leading-relaxed">
+                    <span style={{ fontSize: '12px', color: 'var(--text-main)', lineHeight: 1.4 }}>
                       I understand and explicitly agree to join this course and share relevant learning insights with my instructor.
                     </span>
                   </label>
 
                   {joinError && (
-                    <div className="p-3 rounded-xl bg-rose-50 dark:bg-rose-950/30 border border-rose-200 dark:border-rose-800/50 flex items-center gap-2 text-rose-700 dark:text-rose-300 text-xs">
-                      <AlertCircle className="w-4 h-4 shrink-0 text-rose-600 dark:text-rose-400" />
+                    <div style={{ padding: '10px 14px', background: '#FEE2E2', color: '#DC2626', borderRadius: 'var(--radius-sm)', fontSize: '12px', marginBottom: '14px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      <AlertCircle size={16} style={{ flexShrink: 0 }} />
                       <span>{joinError}</span>
                     </div>
                   )}
 
                   {/* Action Buttons */}
-                  <div className="pt-2 flex justify-between gap-3">
+                  <div style={{ display: 'flex', justifyContent: 'space-between', gap: '10px', marginTop: '16px' }}>
                     <button
                       type="button"
                       onClick={() => setJoinStep('input')}
-                      className="px-4 py-2 text-sm font-medium text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg"
+                      className="btn btn-secondary btn-sm"
                     >
                       Back
                     </button>
@@ -557,11 +796,11 @@ export const StudentCoursesPage: React.FC = () => {
                       type="button"
                       onClick={handleConfirmJoin}
                       disabled={joining || !consentChecked || preview?.already_enrolled}
-                      className="inline-flex items-center gap-2 px-5 py-2 text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed rounded-lg shadow-sm"
+                      className="btn btn-primary btn-sm"
                     >
                       {joining ? (
                         <>
-                          <RefreshCw className="w-4 h-4 animate-spin" /> Joining...
+                          <RefreshCw size={14} className="spin-animation" /> Joining...
                         </>
                       ) : (
                         'Confirm & Join Course'
@@ -577,64 +816,104 @@ export const StudentCoursesPage: React.FC = () => {
 
       {/* Disconnect Confirmation Modal */}
       {disconnectingCourse && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-fade-in">
-          <div className="w-full max-w-md bg-white dark:bg-slate-900 rounded-2xl shadow-2xl border border-slate-200 dark:border-slate-800 overflow-hidden">
-            <div className="p-6">
-              <div className="w-12 h-12 rounded-full bg-rose-100 dark:bg-rose-950/50 text-rose-600 dark:text-rose-400 flex items-center justify-center mb-4">
-                <ShieldAlert className="w-6 h-6" />
+        <div
+          style={{
+            position: 'fixed',
+            inset: 0,
+            background: 'rgba(11, 19, 43, 0.65)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 1000,
+            padding: '20px',
+            backdropFilter: 'blur(3px)',
+          }}
+          onClick={() => !disconnecting && setDisconnectingCourse(null)}
+        >
+          <div
+            className="card"
+            style={{ maxWidth: '440px', width: '100%', padding: '24px' }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '14px' }}>
+              <div
+                style={{
+                  width: '40px',
+                  height: '40px',
+                  borderRadius: '50%',
+                  background: '#FEE2E2',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  color: '#DC2626',
+                }}
+              >
+                <ShieldAlert size={20} />
               </div>
-
-              <h3 className="text-lg font-bold text-slate-900 dark:text-white">
-                Disconnect from Course?
-              </h3>
-
-              <p className="mt-2 text-sm text-slate-600 dark:text-slate-400">
-                Are you sure you want to disconnect from{' '}
-                <strong className="text-slate-900 dark:text-white">"{disconnectingCourse.title}"</strong>?
-              </p>
-
-              <div className="mt-4 p-3.5 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-100 dark:border-slate-700/60 text-xs text-slate-600 dark:text-slate-400 space-y-1.5">
-                <div className="flex items-center gap-2 font-medium text-slate-800 dark:text-slate-200">
-                  <Info className="w-4 h-4 text-indigo-500" />
-                  <span>What happens when you disconnect:</span>
-                </div>
-                <ul className="list-disc pl-5 space-y-1">
-                  <li>Teacher access to your learning insights for this course stops immediately.</li>
-                  <li>Your personal learning history, lectures, and misconceptions are <strong>NOT deleted</strong> and remain in your account.</li>
-                  <li>You can reconnect anytime if you wish.</li>
-                </ul>
+              <div>
+                <h3 style={{ fontSize: '18px', fontWeight: 800, color: 'var(--primary-navy)' }}>
+                  Disconnect from Course?
+                </h3>
               </div>
+            </div>
 
-              {disconnectError && (
-                <div className="mt-4 p-3 rounded-xl bg-rose-50 dark:bg-rose-950/30 border border-rose-200 dark:border-rose-800/50 text-rose-700 dark:text-rose-300 text-xs">
-                  {disconnectError}
-                </div>
-              )}
+            <p style={{ fontSize: '14px', color: 'var(--text-main)', lineHeight: 1.5, marginBottom: '14px' }}>
+              Are you sure you want to disconnect from{' '}
+              <strong style={{ color: 'var(--primary-navy)' }}>"{disconnectingCourse.title}"</strong>?
+            </p>
 
-              <div className="mt-6 flex justify-end gap-3">
-                <button
-                  type="button"
-                  onClick={() => setDisconnectingCourse(null)}
-                  disabled={disconnecting}
-                  className="px-4 py-2 text-sm font-medium text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="button"
-                  onClick={handleDisconnect}
-                  disabled={disconnecting}
-                  className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-rose-600 hover:bg-rose-700 disabled:opacity-50 rounded-lg shadow-sm"
-                >
-                  {disconnecting ? (
-                    <>
-                      <RefreshCw className="w-4 h-4 animate-spin" /> Disconnecting...
-                    </>
-                  ) : (
-                    'Disconnect & Revoke'
-                  )}
-                </button>
+            <div
+              style={{
+                padding: '12px 14px',
+                borderRadius: 'var(--radius-md)',
+                background: 'var(--bg-subtle)',
+                border: '1px solid var(--border-subtle)',
+                fontSize: '12px',
+                color: 'var(--text-muted)',
+                marginBottom: '16px',
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontWeight: 600, color: 'var(--primary-navy)', marginBottom: '6px' }}>
+                <Info size={14} color="var(--accent-purple)" />
+                <span>What happens when you disconnect:</span>
               </div>
+              <ul style={{ paddingLeft: '18px', margin: 0, lineHeight: 1.5 }}>
+                <li>Teacher access to your learning insights for this course stops immediately.</li>
+                <li>Your personal learning history, lectures, and misconceptions are <strong>NOT deleted</strong> and remain in your account.</li>
+                <li>You can reconnect anytime if you wish.</li>
+              </ul>
+            </div>
+
+            {disconnectError && (
+              <div style={{ padding: '8px 12px', background: '#FEE2E2', color: '#DC2626', borderRadius: 'var(--radius-sm)', fontSize: '13px', marginBottom: '14px' }}>
+                {disconnectError}
+              </div>
+            )}
+
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
+              <button
+                type="button"
+                onClick={() => setDisconnectingCourse(null)}
+                disabled={disconnecting}
+                className="btn btn-secondary btn-sm"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleDisconnect}
+                disabled={disconnecting}
+                className="btn btn-sm"
+                style={{ background: '#DC2626', color: '#FFFFFF', borderColor: '#DC2626' }}
+              >
+                {disconnecting ? (
+                  <>
+                    <RefreshCw size={14} className="spin-animation" /> Disconnecting...
+                  </>
+                ) : (
+                  'Disconnect & Revoke'
+                )}
+              </button>
             </div>
           </div>
         </div>
@@ -642,72 +921,124 @@ export const StudentCoursesPage: React.FC = () => {
 
       {/* Associated Lectures Transparency Modal */}
       {activeLecturesCourse && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-fade-in">
-          <div className="w-full max-w-lg bg-white dark:bg-slate-900 rounded-2xl shadow-2xl border border-slate-200 dark:border-slate-800 overflow-hidden flex flex-col">
-            <div className="p-6 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between">
-              <div className="flex items-center gap-2.5">
-                <div className="p-2 rounded-xl bg-indigo-50 dark:bg-indigo-950/40 text-indigo-600 dark:text-indigo-400">
-                  <FileText className="w-5 h-5" />
+        <div
+          style={{
+            position: 'fixed',
+            inset: 0,
+            background: 'rgba(11, 19, 43, 0.65)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 1000,
+            padding: '20px',
+            backdropFilter: 'blur(3px)',
+          }}
+          onClick={() => setActiveLecturesCourse(null)}
+        >
+          <div
+            className="card"
+            style={{ maxWidth: '540px', width: '100%', padding: '24px', display: 'flex', flexDirection: 'column', maxHeight: '85vh' }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                <div
+                  style={{
+                    width: '36px',
+                    height: '36px',
+                    borderRadius: 'var(--radius-md)',
+                    background: 'var(--accent-soft)',
+                    color: 'var(--accent-purple)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                  }}
+                >
+                  <FileText size={18} />
                 </div>
                 <div>
-                  <h3 className="text-lg font-bold text-slate-900 dark:text-white">
+                  <h3 style={{ fontSize: '18px', fontWeight: 800, color: 'var(--primary-navy)' }}>
                     Associated Lectures
                   </h3>
-                  <p className="text-xs text-slate-500 dark:text-slate-400">
+                  <p style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
                     Lectures linked to {activeLecturesCourse.title} ({activeLecturesCourse.course_code || 'No Code'})
                   </p>
                 </div>
               </div>
               <button
                 onClick={() => setActiveLecturesCourse(null)}
-                className="p-1.5 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800"
+                style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--text-muted)' }}
               >
-                <X className="w-5 h-5" />
+                <X size={18} />
               </button>
             </div>
 
-            <div className="p-6 max-h-96 overflow-y-auto">
+            <div style={{ overflowY: 'auto', flex: 1, paddingRight: '4px', marginBottom: '16px' }}>
               {loadingLectures ? (
-                <div className="flex items-center justify-center py-8 text-slate-400">
-                  <RefreshCw className="w-6 h-6 animate-spin text-indigo-500 mr-2" />
-                  <span className="text-xs">Loading associated lectures...</span>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '32px 0', color: 'var(--text-muted)' }}>
+                  <RefreshCw size={24} className="spin-animation" style={{ color: 'var(--accent-purple)', marginRight: '8px' }} />
+                  <span style={{ fontSize: '13px' }}>Loading associated lectures...</span>
                 </div>
               ) : lecturesError ? (
-                <div className="p-3 rounded-xl bg-rose-50 dark:bg-rose-950/30 text-rose-700 text-xs">
+                <div style={{ padding: '10px 14px', background: '#FEE2E2', color: '#DC2626', borderRadius: 'var(--radius-sm)', fontSize: '13px' }}>
                   {lecturesError}
                 </div>
               ) : associatedLectures.length === 0 ? (
-                <div className="text-center py-8 text-slate-500 dark:text-slate-400">
-                  <BookOpen className="w-8 h-8 mx-auto mb-2 text-slate-300" />
-                  <p className="text-sm font-medium">No lectures associated yet</p>
-                  <p className="text-xs text-slate-400 mt-1 max-w-sm mx-auto">
+                <div style={{ textAlign: 'center', padding: '32px 16px', color: 'var(--text-muted)' }}>
+                  <BookOpen size={32} style={{ color: 'var(--text-light)', marginBottom: '8px' }} />
+                  <p style={{ fontSize: '14px', fontWeight: 600, color: 'var(--primary-navy)' }}>No lectures associated yet</p>
+                  <p style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '4px', maxWidth: '360px', margin: '4px auto 0' }}>
                     When you upload a lecture and select{' '}
-                    <strong className="text-indigo-600 font-medium">{activeLecturesCourse.title}</strong>,
-                    its insights will connect to this course.
+                    <strong style={{ color: 'var(--accent-purple)' }}>{activeLecturesCourse.title}</strong>, its insights will connect to this course.
                   </p>
                 </div>
               ) : (
-                <div className="space-y-2.5">
-                  <p className="text-xs text-slate-500 mb-2">
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                  <p style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '4px' }}>
                     These lectures match the course code and share aggregated learning insights with {activeLecturesCourse.teacher_name}:
                   </p>
                   {associatedLectures.map((lec) => (
                     <div
                       key={lec.id}
-                      className="p-3 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-800/40 flex items-center justify-between"
+                      style={{
+                        padding: '12px',
+                        borderRadius: 'var(--radius-md)',
+                        border: '1px solid var(--border-subtle)',
+                        background: 'var(--bg-subtle)',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                      }}
                     >
-                      <div className="flex items-center gap-2.5">
-                        <FileText className="w-4 h-4 text-indigo-500 shrink-0" />
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                        <FileText size={18} color="var(--accent-purple)" style={{ flexShrink: 0 }} />
                         <div>
-                          <p className="text-sm font-medium text-slate-900 dark:text-white">
+                          <p style={{ fontSize: '14px', fontWeight: 600, color: 'var(--primary-navy)' }}>
                             {lec.title}
                           </p>
-                          <p className="text-[11px] text-slate-400">
-                            Course Code: <span className="font-mono text-indigo-600 dark:text-indigo-400">{lec.course_code}</span>
+                          <p style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
+                            Course Code:{' '}
+                            <span style={{ fontFamily: 'JetBrains Mono, monospace', color: 'var(--accent-purple)', fontWeight: 600 }}>
+                              {lec.course_code}
+                            </span>
                           </p>
+                          {lec.prerequisite_lecture_title && (
+                            <p style={{ fontSize: '11px', color: 'var(--accent-purple)', fontWeight: 500, marginTop: '2px' }}>
+                              Builds on: {lec.prerequisite_lecture_title}
+                            </p>
+                          )}
                         </div>
                       </div>
-                      <span className="text-xs text-emerald-600 dark:text-emerald-400 font-medium">
+                      <span
+                        style={{
+                          fontSize: '11px',
+                          fontWeight: 600,
+                          color: '#16A34A',
+                          background: '#DCFCE7',
+                          padding: '2px 8px',
+                          borderRadius: 'var(--radius-full)',
+                        }}
+                      >
                         Shared
                       </span>
                     </div>
@@ -716,11 +1047,11 @@ export const StudentCoursesPage: React.FC = () => {
               )}
             </div>
 
-            <div className="p-4 bg-slate-50 dark:bg-slate-900/80 border-t border-slate-100 dark:border-slate-800 flex justify-end">
+            <div style={{ display: 'flex', justifyContent: 'flex-end', paddingTop: '12px', borderTop: '1px solid var(--border-subtle)' }}>
               <button
                 type="button"
                 onClick={() => setActiveLecturesCourse(null)}
-                className="px-4 py-2 text-sm font-medium text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg"
+                className="btn btn-secondary btn-sm"
               >
                 Close
               </button>

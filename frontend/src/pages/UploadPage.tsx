@@ -10,7 +10,8 @@ import {
   Loader2,
   ArrowRight,
   Info,
-  GraduationCap
+  GraduationCap,
+  BookOpen
 } from 'lucide-react';
 
 interface UploadPageProps {
@@ -43,6 +44,7 @@ export const UploadPage: React.FC<UploadPageProps> = ({ setActiveTab, onLectureC
   const [selectedCourseId, setSelectedCourseId] = useState<string>('');
   const [enrolledCourses, setEnrolledCourses] = useState<StudentEnrollment[]>([]);
   const [existingLectures, setExistingLectures] = useState<Lecture[]>([]);
+  const [prerequisiteLectureId, setPrerequisiteLectureId] = useState<string>('');
   
   const [isDragging, setIsDragging] = useState(false);
   const [uploading, setUploading] = useState(false);
@@ -87,6 +89,7 @@ export const UploadPage: React.FC<UploadPageProps> = ({ setActiveTab, onLectureC
     setTitle('');
     setCourseCode('');
     setSelectedCourseId('');
+    setPrerequisiteLectureId('');
     setQualityWarning(null);
     setIsDuplicate(false);
     setDuplicateLectureData(null);
@@ -170,6 +173,9 @@ export const UploadPage: React.FC<UploadPageProps> = ({ setActiveTab, onLectureC
       }
       if (selectedCourseId) {
         formData.append('course_id', selectedCourseId);
+      }
+      if (prerequisiteLectureId) {
+        formData.append('prerequisite_lecture_id', prerequisiteLectureId);
       }
       formData.append('description', '');
       formData.append('file', selectedFile);
@@ -574,6 +580,25 @@ export const UploadPage: React.FC<UploadPageProps> = ({ setActiveTab, onLectureC
                 value={courseCode}
                 onChange={(e) => setCourseCode(e.target.value)}
               />
+            </div>
+          </div>
+
+          {/* Automatic Prerequisite Detection Notice */}
+          <div
+            style={{
+              marginBottom: '24px',
+              padding: '12px 16px',
+              background: '#EEF2FF',
+              border: '1px solid #C7D2FE',
+              borderRadius: 'var(--radius-md)',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '12px'
+            }}
+          >
+            <BookOpen size={20} color="#4F46E5" style={{ flexShrink: 0 }} />
+            <div style={{ fontSize: '13px', color: '#3730A3', lineHeight: 1.5 }}>
+              <strong>Automatic Prerequisite Linking:</strong> MindTrace will automatically analyze this lecture's concepts against your course library and detect foundational prerequisites without requiring manual configuration.
             </div>
           </div>
 

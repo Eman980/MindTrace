@@ -60,6 +60,7 @@ export const MisconceptionsPage: React.FC<MisconceptionsPageProps> = ({
   onGoToLecture,
 }) => {
   const [misconceptions, setMisconceptions] = useState<Misconception[]>([]);
+  const [currentLectureId, setCurrentLectureId] = useState<number | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -80,11 +81,26 @@ export const MisconceptionsPage: React.FC<MisconceptionsPageProps> = ({
     setLoading(true);
     setError(null);
     try {
-      const data = await api.misconceptions.list({
-        priority: priorityFilter,
-        status_filter: statusFilter,
-      });
+      // 1) Filtered list (what the page shows)
+      // 2) Unfiltered list (only used to find the latest uploaded lecture,
+      //    so status/severity filters never change which lecture is "current")
+      const [data, all] = await Promise.all([
+        api.misconceptions.list({
+          priority: priorityFilter,
+          status_filter: statusFilter,
+        }),
+        api.misconceptions.list({
+          priority: 'All',
+          status_filter: 'All',
+        }),
+      ]);
       setMisconceptions(data);
+
+      // Current lecture = most recently uploaded lecture (highest lecture_id)
+      const ids = all
+        .filter((m: Misconception) => m.lecture_id && !m.is_archived)
+        .map((m: Misconception) => m.lecture_id as number);
+      setCurrentLectureId(ids.length ? Math.max(...ids) : null);
     } catch (err: any) {
       setError(err.message || 'Failed to fetch misconceptions.');
     } finally {
@@ -149,14 +165,19 @@ export const MisconceptionsPage: React.FC<MisconceptionsPageProps> = ({
     }
   };
 
-  // Split misconceptions into current and past
+  // Current = latest uploaded lecture only
   const currentMisconceptions = useMemo(() => {
-    return misconceptions.filter((m) => !m.is_archived);
-  }, [misconceptions]);
+    return misconceptions.filter(
+      (m) => !m.is_archived && m.lecture_id != null && m.lecture_id === currentLectureId
+    );
+  }, [misconceptions, currentLectureId]);
 
+  // Past = every other lecture (older lectures + deleted lectures)
   const pastMisconceptions = useMemo(() => {
-    return misconceptions.filter((m) => !!m.is_archived);
-  }, [misconceptions]);
+    return misconceptions.filter(
+      (m) => m.is_archived || m.lecture_id == null || m.lecture_id !== currentLectureId
+    );
+  }, [misconceptions, currentLectureId]);
 
   // Client-side live search filtering on active tab list
   const filteredMisconceptions = useMemo(() => {

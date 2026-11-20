@@ -26,6 +26,9 @@ const AppInner: React.FC = () => {
       if (params.get('token') || params.get('reset_token') || hash.includes('reset-password')) {
         return 'login';
       }
+      if (params.get('tab')) {
+        return params.get('tab')!;
+      }
     } catch {
       // Ignore
     }
@@ -33,7 +36,15 @@ const AppInner: React.FC = () => {
   });
 
   // For the lecture player — which lecture is open
-  const [selectedLectureId, setSelectedLectureId] = useState<number | null>(null);
+  const [selectedLectureId, setSelectedLectureId] = useState<number | null>(() => {
+    try {
+      const params = new URLSearchParams(window.location.search);
+      const id = params.get('lectureId');
+      return id ? Number(id) : null;
+    } catch {
+      return null;
+    }
+  });
 
   // For the misconception review — which misconception is open
   const [selectedMisconceptionId, setSelectedMisconceptionId] = useState<number | null>(null);

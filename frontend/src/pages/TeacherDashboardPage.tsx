@@ -241,7 +241,7 @@ export const TeacherDashboardPage: React.FC = () => {
             Teacher Workspace
           </h1>
           <p className="section-subtitle" style={{ fontSize: '14px', color: 'var(--text-muted)', margin: 0 }}>
-            Manage your courses and access course-specific learning insights in future phases.
+            Manage your courses and share join codes with your students. Learning insights will be added in FYP-2.
           </p>
         </div>
 
@@ -308,7 +308,7 @@ export const TeacherDashboardPage: React.FC = () => {
                 {successBanner.courseTitle} created successfully!
               </div>
               <div style={{ fontSize: '13px', color: 'var(--text-muted)', marginTop: '2px' }}>
-                Share this unique joining code with your students so they can join this course in Phase 3.
+                Share this unique joining code with your students so they can join this course.
               </div>
             </div>
           </div>
@@ -638,7 +638,7 @@ export const TeacherDashboardPage: React.FC = () => {
           </h3>
         </div>
         <p style={{ fontSize: '13px', color: 'var(--text-muted)', margin: 0, lineHeight: 1.6 }}>
-          <strong>Phase 2 Active:</strong> You can create and manage courses with secure join codes. In <strong>Phase 3</strong>, students will enter your code and grant one-time consent to connect their learning activity. Course concept boundaries and confusion analytics will unlock in subsequent phases.
+          <strong>FYP-1 Active:</strong> You can create and manage courses with secure join codes, and students can join your course using the code with their consent. Teacher lecture upload and confusion analytics will be added in <strong>FYP-2</strong>.
         </p>
       </div>
 
@@ -646,24 +646,42 @@ export const TeacherDashboardPage: React.FC = () => {
       {/* ── CREATE COURSE MODAL ── */}
       {/* ══════════════════════════════════════════════════════════════════════ */}
       {isCreateOpen && (
-        <div className="modal-backdrop">
-          <div className="modal-content" style={{ maxWidth: '500px', width: '100%' }}>
-            <div className="modal-header">
-              <h2 className="modal-title" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                <School size={20} color="#4f46e5" />
+        <div
+          style={{
+            position: 'fixed',
+            inset: 0,
+            background: 'rgba(11, 19, 43, 0.65)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 1000,
+            padding: '20px',
+            backdropFilter: 'blur(3px)',
+          }}
+          onClick={() => !creating && setIsCreateOpen(false)}
+        >
+          <div
+            className="card"
+            style={{ maxWidth: '500px', width: '100%', padding: '24px' }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+              <h2 style={{ fontSize: '18px', fontWeight: 800, color: 'var(--primary-navy)', display: 'flex', alignItems: 'center', gap: '8px', margin: 0 }}>
+                <School size={20} color="var(--accent-purple)" />
                 <span>Create New Course</span>
               </h2>
               <button
-                className="modal-close-btn"
+                type="button"
                 onClick={() => setIsCreateOpen(false)}
                 disabled={creating}
+                style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--text-muted)' }}
               >
                 <X size={18} />
               </button>
             </div>
 
             <form onSubmit={handleCreateSubmit}>
-              <div className="modal-body">
+              <div>
                 {createError && (
                   <div className="alert-banner alert-warning" style={{ marginBottom: '16px' }}>
                     {createError}
@@ -677,14 +695,13 @@ export const TeacherDashboardPage: React.FC = () => {
                   <input
                     id="input-create-course-title"
                     type="text"
-                    className="input-field"
                     placeholder="e.g. Database Systems, Data Structures & Algorithms"
                     value={createTitle}
                     onChange={(e) => setCreateTitle(e.target.value)}
                     disabled={creating}
                     autoFocus
                     required
-                    style={{ width: '100%', padding: '10px 12px', fontSize: '14px', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-subtle)' }}
+                    style={{ width: '100%', padding: '10px 12px', fontSize: '14px', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-subtle)', outline: 'none', boxSizing: 'border-box' }}
                   />
                 </div>
 
@@ -695,12 +712,11 @@ export const TeacherDashboardPage: React.FC = () => {
                   <input
                     id="input-create-course-code"
                     type="text"
-                    className="input-field"
                     placeholder="e.g. CS301, CS101, DBS202"
                     value={createCourseCode}
                     onChange={(e) => setCreateCourseCode(e.target.value)}
                     disabled={creating}
-                    style={{ width: '100%', padding: '10px 12px', fontSize: '14px', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-subtle)' }}
+                    style={{ width: '100%', padding: '10px 12px', fontSize: '14px', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-subtle)', outline: 'none', boxSizing: 'border-box' }}
                   />
                 </div>
 
@@ -710,13 +726,12 @@ export const TeacherDashboardPage: React.FC = () => {
                   </label>
                   <textarea
                     id="textarea-create-course-desc"
-                    className="input-field"
                     placeholder="Brief description of the course topic, syllabus, or target section..."
                     rows={3}
                     value={createDescription}
                     onChange={(e) => setCreateDescription(e.target.value)}
                     disabled={creating}
-                    style={{ width: '100%', padding: '10px 12px', fontSize: '14px', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-subtle)', resize: 'vertical' }}
+                    style={{ width: '100%', padding: '10px 12px', fontSize: '14px', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-subtle)', resize: 'vertical', outline: 'none', boxSizing: 'border-box' }}
                   />
                 </div>
 
@@ -732,15 +747,15 @@ export const TeacherDashboardPage: React.FC = () => {
                     gap: '8px',
                   }}
                 >
-                  <KeyRound size={15} color="#4f46e5" style={{ flexShrink: 0 }} />
+                  <KeyRound size={15} color="var(--accent-purple)" style={{ flexShrink: 0 }} />
                   <span>A secure, collision-resistant joining code (e.g. <code>MIND-XXXXXX</code>) will be generated automatically upon creation.</span>
                 </div>
               </div>
 
-              <div className="modal-footer" style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', marginTop: '20px' }}>
                 <button
                   type="button"
-                  className="btn btn-secondary"
+                  className="btn btn-secondary btn-sm"
                   onClick={() => setIsCreateOpen(false)}
                   disabled={creating}
                 >
@@ -749,7 +764,7 @@ export const TeacherDashboardPage: React.FC = () => {
                 <button
                   id="btn-submit-create-course"
                   type="submit"
-                  className="btn btn-primary"
+                  className="btn btn-primary btn-sm"
                   disabled={creating}
                   style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}
                 >
@@ -766,24 +781,42 @@ export const TeacherDashboardPage: React.FC = () => {
       {/* ── EDIT COURSE MODAL ── */}
       {/* ══════════════════════════════════════════════════════════════════════ */}
       {editingCourse && (
-        <div className="modal-backdrop">
-          <div className="modal-content" style={{ maxWidth: '500px', width: '100%' }}>
-            <div className="modal-header">
-              <h2 className="modal-title" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                <Edit3 size={18} color="#4f46e5" />
+        <div
+          style={{
+            position: 'fixed',
+            inset: 0,
+            background: 'rgba(11, 19, 43, 0.65)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 1000,
+            padding: '20px',
+            backdropFilter: 'blur(3px)',
+          }}
+          onClick={() => !updating && setEditingCourse(null)}
+        >
+          <div
+            className="card"
+            style={{ maxWidth: '500px', width: '100%', padding: '24px' }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+              <h2 style={{ fontSize: '18px', fontWeight: 800, color: 'var(--primary-navy)', display: 'flex', alignItems: 'center', gap: '8px', margin: 0 }}>
+                <Edit3 size={18} color="var(--accent-purple)" />
                 <span>Edit Course Details</span>
               </h2>
               <button
-                className="modal-close-btn"
+                type="button"
                 onClick={() => setEditingCourse(null)}
                 disabled={updating}
+                style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--text-muted)' }}
               >
                 <X size={18} />
               </button>
             </div>
 
             <form onSubmit={handleEditSubmit}>
-              <div className="modal-body">
+              <div>
                 {updateError && (
                   <div className="alert-banner alert-warning" style={{ marginBottom: '16px' }}>
                     {updateError}
@@ -797,12 +830,11 @@ export const TeacherDashboardPage: React.FC = () => {
                   <input
                     id="input-edit-course-title"
                     type="text"
-                    className="input-field"
                     value={editTitle}
                     onChange={(e) => setEditTitle(e.target.value)}
                     disabled={updating}
                     required
-                    style={{ width: '100%', padding: '10px 12px', fontSize: '14px', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-subtle)' }}
+                    style={{ width: '100%', padding: '10px 12px', fontSize: '14px', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-subtle)', outline: 'none', boxSizing: 'border-box' }}
                   />
                 </div>
 
@@ -813,11 +845,10 @@ export const TeacherDashboardPage: React.FC = () => {
                   <input
                     id="input-edit-course-code"
                     type="text"
-                    className="input-field"
                     value={editCourseCode}
                     onChange={(e) => setEditCourseCode(e.target.value)}
                     disabled={updating}
-                    style={{ width: '100%', padding: '10px 12px', fontSize: '14px', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-subtle)' }}
+                    style={{ width: '100%', padding: '10px 12px', fontSize: '14px', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-subtle)', outline: 'none', boxSizing: 'border-box' }}
                   />
                 </div>
 
@@ -827,12 +858,11 @@ export const TeacherDashboardPage: React.FC = () => {
                   </label>
                   <textarea
                     id="textarea-edit-course-desc"
-                    className="input-field"
                     rows={3}
                     value={editDescription}
                     onChange={(e) => setEditDescription(e.target.value)}
                     disabled={updating}
-                    style={{ width: '100%', padding: '10px 12px', fontSize: '14px', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-subtle)', resize: 'vertical' }}
+                    style={{ width: '100%', padding: '10px 12px', fontSize: '14px', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-subtle)', resize: 'vertical', outline: 'none', boxSizing: 'border-box' }}
                   />
                 </div>
 
@@ -848,15 +878,15 @@ export const TeacherDashboardPage: React.FC = () => {
                     gap: '6px',
                   }}
                 >
-                  <Info size={14} color="#4f46e5" />
+                  <Info size={14} color="var(--accent-purple)" style={{ flexShrink: 0 }} />
                   <span>Join Code (<code>{editingCourse.join_code}</code>) is permanent and cannot be modified.</span>
                 </div>
               </div>
 
-              <div className="modal-footer" style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', marginTop: '20px' }}>
                 <button
                   type="button"
-                  className="btn btn-secondary"
+                  className="btn btn-secondary btn-sm"
                   onClick={() => setEditingCourse(null)}
                   disabled={updating}
                 >
@@ -865,7 +895,7 @@ export const TeacherDashboardPage: React.FC = () => {
                 <button
                   id="btn-submit-edit-course"
                   type="submit"
-                  className="btn btn-primary"
+                  className="btn btn-primary btn-sm"
                   disabled={updating}
                   style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}
                 >
@@ -882,26 +912,44 @@ export const TeacherDashboardPage: React.FC = () => {
       {/* ── COURSE DETAIL MODAL ── */}
       {/* ══════════════════════════════════════════════════════════════════════ */}
       {detailCourse && (
-        <div className="modal-backdrop">
-          <div className="modal-content" style={{ maxWidth: '540px', width: '100%' }}>
-            <div className="modal-header">
-              <h2 className="modal-title" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                <BookOpen size={20} color="#4f46e5" />
+        <div
+          style={{
+            position: 'fixed',
+            inset: 0,
+            background: 'rgba(11, 19, 43, 0.65)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 1000,
+            padding: '20px',
+            backdropFilter: 'blur(3px)',
+          }}
+          onClick={() => setDetailCourse(null)}
+        >
+          <div
+            className="card"
+            style={{ maxWidth: '540px', width: '100%', padding: '24px' }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+              <h2 style={{ fontSize: '18px', fontWeight: 800, color: 'var(--primary-navy)', display: 'flex', alignItems: 'center', gap: '8px', margin: 0 }}>
+                <BookOpen size={20} color="var(--accent-purple)" />
                 <span>Course Details</span>
               </h2>
               <button
-                className="modal-close-btn"
+                type="button"
                 onClick={() => setDetailCourse(null)}
+                style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--text-muted)' }}
               >
                 <X size={18} />
               </button>
             </div>
 
-            <div className="modal-body">
+            <div>
               {/* Title & Code */}
               <div style={{ marginBottom: '18px' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '6px' }}>
-                  <h3 style={{ fontSize: '20px', fontWeight: 800, color: 'var(--navy-900)', margin: 0 }}>
+                  <h3 style={{ fontSize: '20px', fontWeight: 800, color: 'var(--primary-navy)', margin: 0 }}>
                     {detailCourse.title}
                   </h3>
                   {detailCourse.course_code && (
@@ -910,9 +958,10 @@ export const TeacherDashboardPage: React.FC = () => {
                         fontSize: '11px',
                         fontWeight: 700,
                         padding: '2px 8px',
-                        borderRadius: '4px',
+                        borderRadius: 'var(--radius-full)',
                         background: 'var(--accent-soft)',
-                        color: 'var(--primary-accent)',
+                        color: 'var(--accent-purple)',
+                        fontFamily: 'JetBrains Mono, monospace',
                       }}
                     >
                       {detailCourse.course_code}
@@ -934,11 +983,11 @@ export const TeacherDashboardPage: React.FC = () => {
                   marginBottom: '18px',
                 }}
               >
-                <div style={{ fontSize: '11px', fontWeight: 700, textTransform: 'uppercase', color: '#4f46e5', letterSpacing: '0.04em', marginBottom: '6px' }}>
+                <div style={{ fontSize: '11px', fontWeight: 700, textTransform: 'uppercase', color: 'var(--accent-purple)', letterSpacing: '0.04em', marginBottom: '6px' }}>
                   Student Course Join Code
                 </div>
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px' }}>
-                  <code style={{ fontSize: '22px', fontWeight: 800, color: '#4f46e5', letterSpacing: '0.06em' }}>
+                  <code style={{ fontSize: '22px', fontWeight: 800, color: 'var(--accent-purple)', letterSpacing: '0.06em' }}>
                     {detailCourse.join_code}
                   </code>
                   <button
@@ -961,7 +1010,7 @@ export const TeacherDashboardPage: React.FC = () => {
                   </button>
                 </div>
                 <p style={{ fontSize: '12px', color: 'var(--text-muted)', margin: '8px 0 0', lineHeight: 1.4 }}>
-                  Distribute this joining code to your students. In Phase 3, students will enter this code to connect with your course.
+                  Distribute this joining code to your students. They can enter it in My Courses to join your course.
                 </p>
               </div>
 
@@ -987,7 +1036,7 @@ export const TeacherDashboardPage: React.FC = () => {
               </div>
             </div>
 
-            <div className="modal-footer" style={{ display: 'flex', justifyContent: 'space-between' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '20px', paddingTop: '16px', borderTop: '1px solid var(--border-subtle)' }}>
               <button
                 className="btn btn-secondary btn-sm"
                 style={{ color: '#dc2626' }}
@@ -1022,29 +1071,47 @@ export const TeacherDashboardPage: React.FC = () => {
       {/* ── DELETE CONFIRMATION MODAL ── */}
       {/* ══════════════════════════════════════════════════════════════════════ */}
       {deletingCourse && (
-        <div className="modal-backdrop">
-          <div className="modal-content" style={{ maxWidth: '440px', width: '100%' }}>
-            <div className="modal-header">
-              <h2 className="modal-title" style={{ display: 'flex', alignItems: 'center', gap: '8px', color: '#dc2626' }}>
+        <div
+          style={{
+            position: 'fixed',
+            inset: 0,
+            background: 'rgba(11, 19, 43, 0.65)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 1000,
+            padding: '20px',
+            backdropFilter: 'blur(3px)',
+          }}
+          onClick={() => !deleting && setDeletingCourse(null)}
+        >
+          <div
+            className="card"
+            style={{ maxWidth: '440px', width: '100%', padding: '24px' }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+              <h2 style={{ fontSize: '18px', fontWeight: 800, color: '#dc2626', display: 'flex', alignItems: 'center', gap: '8px', margin: 0 }}>
                 <AlertCircle size={20} />
                 <span>Delete Course?</span>
               </h2>
               <button
-                className="modal-close-btn"
+                type="button"
                 onClick={() => setDeletingCourse(null)}
                 disabled={deleting}
+                style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--text-muted)' }}
               >
                 <X size={18} />
               </button>
             </div>
 
-            <div className="modal-body">
+            <div>
               {deleteError && (
                 <div className="alert-banner alert-warning" style={{ marginBottom: '14px' }}>
                   {deleteError}
                 </div>
               )}
-              <p style={{ fontSize: '14px', color: 'var(--navy-800)', margin: '0 0 12px', lineHeight: 1.5 }}>
+              <p style={{ fontSize: '14px', color: 'var(--primary-navy)', margin: '0 0 12px', lineHeight: 1.5 }}>
                 Are you sure you want to delete <strong>{deletingCourse.title}</strong>?
               </p>
               <p style={{ fontSize: '13px', color: 'var(--text-muted)', margin: 0, lineHeight: 1.5 }}>
@@ -1052,9 +1119,10 @@ export const TeacherDashboardPage: React.FC = () => {
               </p>
             </div>
 
-            <div className="modal-footer" style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', marginTop: '20px' }}>
               <button
-                className="btn btn-secondary"
+                type="button"
+                className="btn btn-secondary btn-sm"
                 onClick={() => setDeletingCourse(null)}
                 disabled={deleting}
               >
@@ -1062,13 +1130,13 @@ export const TeacherDashboardPage: React.FC = () => {
               </button>
               <button
                 id="btn-confirm-delete-course"
-                className="btn"
+                className="btn btn-sm"
                 onClick={handleDeleteSubmit}
                 disabled={deleting}
                 style={{
                   background: '#dc2626',
                   color: '#FFFFFF',
-                  border: 'none',
+                  borderColor: '#dc2626',
                   display: 'inline-flex',
                   alignItems: 'center',
                   gap: '6px',

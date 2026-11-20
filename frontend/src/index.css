@@ -643,3 +643,15 @@ code, pre {
     font-size: 18px;
   }
 }
+
+
+/* Animations */
+@keyframes spin-animation {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.spin-animation {
+  animation: spin-animation 1s linear infinite;
+}

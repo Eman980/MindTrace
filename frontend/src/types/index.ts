@@ -88,6 +88,20 @@ export interface CheckpointEvaluation {
   correct_answer?: string;
   explanation?: string;
   points_awarded: number;
+  score?: number;
+  max_score?: number;
+  percentage?: number;
+  rubric_breakdown?: Array<{
+    criterion: string;
+    status: 'correct' | 'partial' | 'missing' | 'incorrect';
+    points_awarded: number;
+    max_points: number;
+    notes?: string;
+  }>;
+  what_understood?: string;
+  what_missing?: string;
+  what_needs_correction?: string;
+  how_to_improve?: string;
   misconception_created_or_updated: boolean;
   new_severity_level?: string;
   grade?: 'correct' | 'partial' | 'incorrect' | 'unanswered';
@@ -412,4 +426,134 @@ export interface AssociatedLecture {
   title: string;
   course_code?: string | null;
   created_at?: string;
+  prerequisite_lecture_id?: number | null;
+  prerequisite_lecture_title?: string | null;
 }
+
+// ══════════════════════════════════════════════════════════════════════════════
+// Assessment Types (Complete Difficulty-Based Assessment System)
+// ══════════════════════════════════════════════════════════════════════════════
+
+export type AssessmentDifficulty = 'easy' | 'moderate' | 'hard';
+
+export interface AssessmentQuestion {
+  id: string;
+  type: 'mcq' | 'short_answer';
+  difficulty: AssessmentDifficulty;
+  question_text: string;
+  options?: string[] | null;
+  max_points: number;
+  concept_id?: number | null;
+  concept_title?: string | null;
+  source_timestamp?: number | null;
+}
+
+export interface Assessment {
+  id: number;
+  lecture_id: number;
+  difficulty: AssessmentDifficulty;
+  title: string;
+  description: string;
+  total_questions: number;
+  mcq_count: number;
+  short_answer_count: number;
+  max_score: number;
+  questions: AssessmentQuestion[];
+}
+
+export interface AssessmentStartResponse {
+  attempt_id: number;
+  attempt_number?: number;
+  resumed: boolean;
+  assessment: Assessment;
+  in_progress_answers: Record<string, string>;
+}
+
+export interface AssessmentRubricItem {
+  criterion: string;
+  status: 'correct' | 'partial' | 'missing' | 'incorrect';
+  points_awarded: number;
+  max_points: number;
+  notes?: string | null;
+}
+
+export interface AssessmentQuestionResult {
+  question_id: string;
+  question_text: string;
+  type: 'mcq' | 'short_answer';
+  difficulty: AssessmentDifficulty;
+  student_answer: string;
+  correct_answer: string;
+  explanation?: string | null;
+  is_correct: boolean;
+  verdict: 'correct' | 'partial' | 'incorrect';
+  score: number;
+  max_score: number;
+  percentage: number;
+  feedback: string;
+  rubric_breakdown?: AssessmentRubricItem[] | null;
+  what_understood?: string | null;
+  what_missing?: string | null;
+  what_needs_correction?: string | null;
+  how_to_improve?: string | null;
+  concept_id?: number | null;
+  concept_title?: string | null;
+  remediation_timestamp?: number | null;
+}
+
+export interface AssessmentRecommendedRevision {
+  concept_id?: number | null;
+  concept_title: string;
+  timestamp: number;
+  reason: string;
+}
+
+export interface AssessmentResult {
+  attempt_id: number;
+  attempt_number?: number;
+  assessment_id: number;
+  lecture_id: number;
+  difficulty: AssessmentDifficulty;
+  status: string;
+  total_score: number;
+  max_score: number;
+  percentage: number;
+  mcq_correct_count: number;
+  mcq_total_count: number;
+  short_score: number;
+  short_max_score: number;
+  question_results: AssessmentQuestionResult[];
+  concepts_understood: string[];
+  concepts_partially_understood?: string[];
+  concepts_needing_improvement: string[];
+  recommended_revision: AssessmentRecommendedRevision[];
+  submitted_at?: string | null;
+}
+
+export interface AssessmentAttemptSummary {
+  id: number;
+  attempt_number?: number;
+  assessment_id: number;
+  difficulty: AssessmentDifficulty;
+  status: string;
+  total_score: number;
+  max_score: number;
+  percentage: number;
+  submitted_at?: string | null;
+  started_at: string;
+}
+
+export interface AssessmentStatus {
+  lecture_id: number;
+  completed_difficulties: string[];
+  in_progress_attempt?: {
+    attempt_id: number;
+    assessment_id: number;
+    difficulty: AssessmentDifficulty;
+    started_at: string;
+    saved_answers: Record<string, string>;
+    total_questions: number;
+  } | null;
+  attempts: AssessmentAttemptSummary[];
+}
+
